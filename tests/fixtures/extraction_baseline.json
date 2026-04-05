@@ -2,5 +2,9 @@
   "sample_text_pdf": {
     "sha256": "19834f1c9e9cb8090cc44b21bf517f40ceb60ae498966aabec8c710da8a84e81",
     "char_count": 47
+  },
+  "sample_page_html": {
+    "sha256": "429a89ea7c5c326242944ba71ac36b89d6f240b5889a1b6f05d650d6c1be2949",
+    "char_count": 1041
   }
 }

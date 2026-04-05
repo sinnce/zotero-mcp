@@ -313,23 +313,15 @@ class LocalZoteroReader:
             return ""
 
     def _extract_text_from_html(self, file_path: Path) -> str:
-        """Extract text from HTML using markitdown if available; fallback to stripping tags."""
-        # Try markitdown first
-        try:
-            from markitdown import MarkItDown
+        from zotero_mcp.extraction.markitdown_ext import MarkItDownExtractor
 
-            md = MarkItDown()
-            result = md.convert(str(file_path))
-            return result.text_content or ""
-        except Exception:
-            pass
-        # Fallback using a simple parser
+        ext = MarkItDownExtractor()
         try:
-            from bs4 import BeautifulSoup  # type: ignore
-
-            html = file_path.read_text(errors="ignore")
-            return BeautifulSoup(html, "html.parser").get_text(" ")
-        except Exception:
+            content = file_path.read_bytes()
+            result = ext.extract(content, "text/html", {})
+            return result.text
+        except Exception as e:
+            logger.warning(f"HTML extraction failed: {file_path.name}: {e}")
             return ""
 
     def _extract_text_from_file(self, file_path: Path) -> str:
