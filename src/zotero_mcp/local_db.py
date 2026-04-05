@@ -32,19 +32,21 @@ def _extract_pdf_worker(file_path: str, maxpages: int, result_queue):
     """
     try:
         import logging as _logging
+
         _logging.getLogger("pdfminer").setLevel(_logging.ERROR)
 
         from pdfminer.high_level import extract_text
+
         text = extract_text(file_path, maxpages=maxpages) or ""
         result_queue.put(text)
     except Exception:
         result_queue.put("")
 
 
-
 @dataclass
 class ZoteroItem:
     """Represents a Zotero item with text content for semantic search."""
+
     item_id: int
     key: str
     item_type_id: int
@@ -139,7 +141,12 @@ class LocalZoteroReader:
             db_path = Path.home() / "Zotero" / "zotero.sqlite"
             if not db_path.exists():
                 # Fallback to XP/2000 location
-                db_path = Path(os.path.expanduser("~/Documents and Settings")) / os.getenv("USERNAME", "") / "Zotero" / "zotero.sqlite"
+                db_path = (
+                    Path(os.path.expanduser("~/Documents and Settings"))
+                    / os.getenv("USERNAME", "")
+                    / "Zotero"
+                    / "zotero.sqlite"
+                )
         else:  # Linux and others
             db_path = Path.home() / "Zotero" / "zotero.sqlite"
 
@@ -180,6 +187,7 @@ class LocalZoteroReader:
             return None
         try:
             import re
+
             text = prefs_path.read_text(encoding="utf-8", errors="replace")
             m = re.search(
                 r'user_pref\("extensions\.zotero\.baseAttachmentPath",\s*"([^"]+)"\)',
@@ -194,8 +202,7 @@ class LocalZoteroReader:
     def _iter_parent_attachments(self, parent_item_id: int):
         """Yield tuples (attachment_key, path, content_type) for a parent item."""
         conn = self._get_connection()
-        query = (
-            """
+        query = """
             SELECT ia.itemID as attachmentItemID,
                    ia.parentItemID as parentItemID,
                    ia.path as path,
@@ -205,7 +212,6 @@ class LocalZoteroReader:
             JOIN items att ON att.itemID = ia.itemID
             WHERE ia.parentItemID = ?
             """
-        )
         for row in conn.execute(query, (parent_item_id,)):
             yield row["attachmentKey"], row["path"], row["contentType"]
 
@@ -232,6 +238,7 @@ class LocalZoteroReader:
         # Linked file as URL: 'file:///path/to/file.pdf'
         if zotero_path.startswith("file://"):
             from urllib.parse import urlparse, unquote
+
             parsed = urlparse(zotero_path)
             decoded_path = unquote(parsed.path or "")
             # file:///C:/... on Windows
@@ -273,10 +280,9 @@ class LocalZoteroReader:
         Returns the extracted text, empty string on failure, or
         _EXTRACTION_TIMEOUT sentinel if the process was killed due to timeout.
         """
-        import subprocess
         import sys
+        from zotero_mcp.extraction.pdfminer_ext import PdfminerExtractor
 
-        # Page limit (preserve existing fallback chain)
         if isinstance(self.pdf_max_pages, int) and self.pdf_max_pages > 0:
             maxpages = self.pdf_max_pages
         else:
@@ -288,35 +294,21 @@ class LocalZoteroReader:
 
         timeout = self.pdf_timeout or 30
 
-        # Inline pdfminer script — imports ONLY pdfminer, not zotero_mcp,
-        # so the child process never triggers FastMCP initialization.
-        script = (
-            "import sys, logging; "
-            "logging.getLogger('pdfminer').setLevel(logging.ERROR); "
-            "from pdfminer.high_level import extract_text; "
-            "sys.stdout.write(extract_text(sys.argv[1], maxpages=int(sys.argv[2])) or '')"
-        )
-
+        ext = PdfminerExtractor(max_pages=maxpages, timeout=timeout)
         try:
-            result = subprocess.run(
-                [sys.executable, "-c", script, str(file_path), str(maxpages)],
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-            )
-            if result.returncode == 0:
-                return result.stdout
-            logger.warning(
-                f"PDF extraction failed (exit {result.returncode}): {file_path.name}: "
-                f"{result.stderr[:200] if result.stderr else 'no error output'}"
-            )
+            content = file_path.read_bytes()
+            result = ext.extract(content, "application/pdf", {})
+            return result.text
+        except RuntimeError as e:
+            if "timed out" in str(e):
+                sys.stderr.write(f"\r{' ' * 120}\r")
+                logger.warning(f"PDF extraction timed out after {timeout}s: {file_path.name}")
+                return _EXTRACTION_TIMEOUT
+            sys.stderr.write(f"\r{' ' * 120}\r")
+            logger.warning(f"PDF extraction failed: {file_path.name}: {e}")
             return ""
-        except subprocess.TimeoutExpired:
-            sys.stderr.write(f"\r{' ' * 120}\r")  # Clear progress line before warning
-            logger.warning(f"PDF extraction timed out after {timeout}s: {file_path.name}")
-            return _EXTRACTION_TIMEOUT
         except Exception as e:
-            sys.stderr.write(f"\r{' ' * 120}\r")  # Clear progress line before warning
+            sys.stderr.write(f"\r{' ' * 120}\r")
             logger.warning(f"PDF extraction failed: {file_path.name}: {e}")
             return ""
 
@@ -325,6 +317,7 @@ class LocalZoteroReader:
         # Try markitdown first
         try:
             from markitdown import MarkItDown
+
             md = MarkItDown()
             result = md.convert(str(file_path))
             return result.text_content or ""
@@ -333,6 +326,7 @@ class LocalZoteroReader:
         # Fallback using a simple parser
         try:
             from bs4 import BeautifulSoup  # type: ignore
+
             html = file_path.read_text(errors="ignore")
             return BeautifulSoup(html, "html.parser").get_text(" ")
         except Exception:
@@ -384,7 +378,11 @@ class LocalZoteroReader:
         if not text:
             return None
         # Determine source type
-        source = "pdf" if target.suffix.lower() == ".pdf" else ("html" if target.suffix.lower() in {".html", ".htm"} else "file")
+        source = (
+            "pdf"
+            if target.suffix.lower() == ".pdf"
+            else ("html" if target.suffix.lower() in {".html", ".htm"} else "file")
+        )
         return (text, source)
 
     def close(self):
@@ -453,9 +451,7 @@ class LocalZoteroReader:
         ).fetchall()
         return [dict(row) for row in rows]
 
-    def get_feed_items(
-        self, library_id: int, limit: int = 20
-    ) -> list[dict[str, Any]]:
+    def get_feed_items(self, library_id: int, limit: int = 20) -> list[dict[str, Any]]:
         """Get items from a specific RSS feed by its libraryID."""
         conn = self._get_connection()
         rows = conn.execute(
@@ -514,7 +510,9 @@ class LocalZoteroReader:
         )
         return cursor.fetchone()[0]
 
-    def get_items_with_text(self, limit: int | None = None, include_fulltext: bool = False, key_filter: str | None = None) -> list[ZoteroItem]:
+    def get_items_with_text(
+        self, limit: int | None = None, include_fulltext: bool = False, key_filter: str | None = None
+    ) -> list[ZoteroItem]:
         """
         Get all items with their text content for semantic search.
 
@@ -600,20 +598,21 @@ class LocalZoteroReader:
 
         for row in cursor:
             item = ZoteroItem(
-                item_id=row['itemID'],
-                key=row['key'],
-                item_type_id=row['itemTypeID'],
-                item_type=row['item_type'],
-                doi=row['doi'],
-                title=row['title'],
-                abstract=row['abstract'],
-                creators=row['creators'],
-                fulltext=(res := (self._extract_fulltext_for_item(row['itemID']) if include_fulltext else None)) and res[0],
+                item_id=row["itemID"],
+                key=row["key"],
+                item_type_id=row["itemTypeID"],
+                item_type=row["item_type"],
+                doi=row["doi"],
+                title=row["title"],
+                abstract=row["abstract"],
+                creators=row["creators"],
+                fulltext=(res := (self._extract_fulltext_for_item(row["itemID"]) if include_fulltext else None))
+                and res[0],
                 fulltext_source=res[1] if include_fulltext and res else None,
-                notes=row['notes'],
-                extra=row['extra'],
-                date_added=row['dateAdded'],
-                date_modified=row['dateModified']
+                notes=row["notes"],
+                extra=row["extra"],
+                date_added=row["dateAdded"],
+                date_modified=row["dateModified"],
             )
             items.append(item)
 
@@ -670,7 +669,8 @@ class LocalZoteroReader:
         conn = self._get_connection()
         cursor = conn.cursor()
         pattern = f"%{query}%"
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT i.key, n.note, n.title,
                    pi.key as parentKey,
                    pdv.value as parentTitle
@@ -682,24 +682,29 @@ class LocalZoteroReader:
             WHERE n.note LIKE ?
             AND i.itemID NOT IN (SELECT itemID FROM deletedItems)
             LIMIT ?
-        """, (pattern, limit))
+        """,
+            (pattern, limit),
+        )
 
         results = []
         for row in cursor.fetchall():
             note_html = row[1] or ""
             # Post-filter: skip if query only matches HTML tags, not content
             from zotero_mcp.utils import clean_html
+
             clean_text = clean_html(note_html)
             if query.lower() not in clean_text.lower():
                 continue
-            results.append({
-                "type": "note",
-                "key": row[0],
-                "text": note_html,
-                "parent_key": row[3],
-                "parent_title": row[4] or ("Unknown" if row[3] else None),
-                "tags": [],  # Tags require a separate query; omitted for speed
-            })
+            results.append(
+                {
+                    "type": "note",
+                    "key": row[0],
+                    "text": note_html,
+                    "parent_key": row[3],
+                    "parent_title": row[4] or ("Unknown" if row[3] else None),
+                    "tags": [],  # Tags require a separate query; omitted for speed
+                }
+            )
         return results
 
     def search_annotations_local(self, query: str, limit: int = 20) -> list[dict]:
@@ -708,7 +713,8 @@ class LocalZoteroReader:
         cursor = conn.cursor()
         pattern = f"%{query}%"
         # Two-hop join: annotation -> attachment -> grandparent item (for title)
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT i.key, ia.text, ia.comment, ia.type, ia.color, ia.pageLabel,
                    att.key as attachmentKey,
                    gpi.key as parentKey,
@@ -723,25 +729,29 @@ class LocalZoteroReader:
             WHERE (ia.text LIKE ? OR ia.comment LIKE ?)
             AND i.itemID NOT IN (SELECT itemID FROM deletedItems)
             LIMIT ?
-        """, (pattern, pattern, limit))
+        """,
+            (pattern, pattern, limit),
+        )
 
         # Map integer annotation types to names
         type_map = {1: "highlight", 2: "note", 3: "image", 4: "ink", 5: "underline"}
 
         results = []
         for row in cursor.fetchall():
-            results.append({
-                "type": "annotation",
-                "key": row[0],
-                "text": row[1] or "",
-                "comment": row[2] or "",
-                "annotation_type": type_map.get(row[3], "unknown"),
-                "color": row[4] or "",
-                "page_label": row[5] or None,
-                "attachment_key": row[6],
-                "parent_key": row[7],
-                "parent_title": row[8] or ("Unknown" if row[7] else None),
-            })
+            results.append(
+                {
+                    "type": "annotation",
+                    "key": row[0],
+                    "text": row[1] or "",
+                    "comment": row[2] or "",
+                    "annotation_type": type_map.get(row[3], "unknown"),
+                    "color": row[4] or "",
+                    "page_label": row[5] or None,
+                    "attachment_key": row[6],
+                    "parent_key": row[7],
+                    "parent_title": row[8] or ("Unknown" if row[7] else None),
+                }
+            )
         return results
 
 
