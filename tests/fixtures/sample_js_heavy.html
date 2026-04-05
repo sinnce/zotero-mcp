@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>JS Heavy Page</title>
+  <script>var x = 1; var config = {api: 'https://example.com/api'};</script>
+  <script>var y = 2; function init() { return null; }</script>
+  <script src="https://example.com/analytics.js"></script>
+  <script src="https://example.com/tracking.js"></script>
+</head>
+<body>
+  <script>document.addEventListener('DOMContentLoaded', function() { init(); });</script>
+  <div id="app">
+    <script>var app = {loaded: false};</script>
+    <p>Minimal visible text content.</p>
+    <script>app.loaded = true;</script>
+  </div>
+  <script>console.log('page loaded');</script>
+</body>
+</html>

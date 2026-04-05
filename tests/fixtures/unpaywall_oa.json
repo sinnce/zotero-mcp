@@ -1,0 +1,24 @@
+{
+  "doi": "10.1038/nature12373",
+  "title": "Sample OA Paper",
+  "is_oa": true,
+  "year": 2013,
+  "journal_name": "Nature",
+  "publisher": "Springer Nature",
+  "best_oa_location": {
+    "url": "https://www.ncbi.nlm.nih.gov/pmc/articles/PMC4170025/pdf/",
+    "url_for_pdf": "https://www.ncbi.nlm.nih.gov/pmc/articles/PMC4170025/pdf/",
+    "host_type": "repository",
+    "license": "cc-by",
+    "version": "publishedVersion"
+  },
+  "oa_locations": [
+    {
+      "url": "https://www.ncbi.nlm.nih.gov/pmc/articles/PMC4170025/pdf/",
+      "url_for_pdf": "https://www.ncbi.nlm.nih.gov/pmc/articles/PMC4170025/pdf/",
+      "host_type": "repository",
+      "license": "cc-by",
+      "version": "publishedVersion"
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:arxiv="http://arxiv.org/schemas/atom">
+  <entry>
+    <id>http://arxiv.org/abs/2301.00001v1</id>
+    <title>Sample arXiv Paper: A Comprehensive Study</title>
+    <summary>Abstract text here. This paper presents findings on sample topic.</summary>
+    <published>2023-01-01T00:00:00Z</published>
+    <updated>2023-01-01T00:00:00Z</updated>
+    <author><name>First Author</name></author>
+    <author><name>Second Author</name></author>
+    <link href="https://arxiv.org/pdf/2301.00001v1" rel="related" title="pdf" type="application/pdf"/>
+    <arxiv:doi>10.12345/sample-doi</arxiv:doi>
+    <category term="cs.AI" scheme="http://arxiv.org/schemas/atom"/>
+  </entry>
+</feed>
