@@ -30,10 +30,20 @@ async def download_paper_artifact(
     if isinstance(result, PipelineError):
         return f"Download failed: [{result.code}] {result.message}"
 
+    import re
+
     lines = [
         f"Downloaded: {result.file_path}",
         f"Content type: {result.content_type}",
         f"Size: {result.size_bytes:,} bytes",
         "Status: validated ✓",
     ]
+
+    lines.append("")
+    lines.append("[Paper Ingest Provenance - download step]")
+    lines.append("artifact_type: pdf")
+    proxy_match = re.search(r"\.([^.]+\.edu|[^.]+\.ac\.[a-z]+)", url)
+    if proxy_match:
+        lines.append(f"proxy_provider: {proxy_match.group(0)}")
+
     return "\n".join(lines)

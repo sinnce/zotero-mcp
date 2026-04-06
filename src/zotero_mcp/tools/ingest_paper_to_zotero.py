@@ -33,6 +33,18 @@ def ingest_paper_to_zotero(
 
     prov = ProvenanceMetadata()
 
+    if provenance:
+        for line in provenance.splitlines():
+            line = line.strip()
+            if ":" in line and not line.startswith("["):
+                key, _, val = line.partition(":")
+                key, val = key.strip(), val.strip()
+                if val and hasattr(prov, key):
+                    if val.lower() in ("true", "false"):
+                        setattr(prov, key, val.lower() == "true")
+                    else:
+                        setattr(prov, key, val)
+
     result = ingest_paper(
         write_zot=write_zot,
         read_zot=read_zot,

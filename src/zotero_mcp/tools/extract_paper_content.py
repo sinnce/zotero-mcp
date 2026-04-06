@@ -57,4 +57,11 @@ def extract_paper_content(
     else:
         lines.append("\n[No text extracted]")
 
+    lines.append("")
+    lines.append("[Paper Ingest Provenance - extract step]")
+    lines.append(f"extraction_backend: {result.backend}")
+    lines.append(f"has_fulltext: {result.quality_signal != 'empty'}")
+    if result.fallback_chain:
+        lines.append(f"fallback_reason: {result.fallback_chain[0][:100]}")
+
     return "\n".join(lines)

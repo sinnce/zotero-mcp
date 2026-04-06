@@ -34,4 +34,13 @@ async def resolve_paper_access(identifier: str, ctx: Context) -> str:
     else:
         lines.append("No open-access location found.")
 
+    lines.append("")
+    lines.append("[Paper Ingest Provenance - resolve step]")
+    lines.append(f"access_source: {result.identifier_type}")
+    if result.best_location:
+        resolver_name = "Unpaywall OA" if result.identifier_type == "doi" else "arXiv API"
+        lines.append(f"resolver_name: {resolver_name}")
+        if result.best_location.license:
+            lines.append(f"license: {result.best_location.license}")
+
     return "\n".join(lines)
