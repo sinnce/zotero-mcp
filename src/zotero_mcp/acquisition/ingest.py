@@ -8,13 +8,23 @@ from .types import IngestResult, PipelineError, ProvenanceMetadata
 logger = logging.getLogger(__name__)
 
 
-def _check_duplicate(zot, doi: str | None, title: str) -> str | None:
+def _check_duplicate(zot, doi: str | None, arxiv_id: str | None, title: str) -> str | None:
     if doi:
         try:
             results = zot.items(q=doi, limit=5)
             for item in results:
                 data = item.get("data", {})
                 if data.get("DOI", "").lower() == doi.lower():
+                    return data.get("key")
+        except Exception:
+            pass
+    if arxiv_id:
+        try:
+            results = zot.items(q=arxiv_id, limit=5)
+            for item in results:
+                data = item.get("data", {})
+                extra = data.get("extra", "")
+                if arxiv_id.lower() in extra.lower():
                     return data.get("key")
         except Exception:
             pass
@@ -38,7 +48,7 @@ def ingest_paper(
     if provenance is None:
         provenance = ProvenanceMetadata()
 
-    existing_key = _check_duplicate(read_zot, doi, title)
+    existing_key = _check_duplicate(read_zot, doi, arxiv_id, title)
     if existing_key:
         return IngestResult(
             item_key=existing_key,
