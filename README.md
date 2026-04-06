@@ -377,6 +377,38 @@ The first time you use PDF annotation features, the necessary tools will be auto
 - `zotero_get_pdf_outline`: Extract the table of contents / outline from a PDF attachment
 - `zotero_search_by_citation_key`: Look up items by BetterBibTeX citation key (with Extra field fallback)
 
+## 📥 Paper Acquisition Tools (PKB-1)
+
+These tools enable automated paper acquisition from open-access sources:
+
+### New Tools
+- `resolve_paper_access`: Resolve a DOI, arXiv ID, or URL to open-access PDF locations via Unpaywall and arXiv
+- `download_paper_artifact`: Download a paper PDF from a URL with content validation
+- `extract_paper_content`: Extract text from a PDF or HTML file using the unified extraction registry
+- `ingest_paper_to_zotero`: Ingest a paper (with optional PDF) into your Zotero library
+
+### Configuration (optional)
+Add an `acquisition` section to `~/.config/zotero-mcp/config.json`:
+
+```json
+{
+  "semantic_search": { },
+  "acquisition": {
+    "unpaywall_email": "your@email.com",
+    "institutional_access": {
+      "enabled": false,
+      "ezproxy_prefix": "proxy.yourlib.edu"
+    },
+    "download": {
+      "timeout_seconds": 30,
+      "max_size_mb": 100
+    }
+  }
+}
+```
+
+All fields are optional with sensible defaults.
+
 ## 🧪 Testing
 
 ### Unit Tests
