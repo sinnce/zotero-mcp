@@ -409,6 +409,124 @@ Add an `acquisition` section to `~/.config/zotero-mcp/config.json`:
 
 All fields are optional with sensible defaults.
 
+### Using this fork instead of the stable installed MCP
+
+If you are developing in a local clone (for example `/home/sinnce/zotero-mcp`) and want your MCP client to use the fork instead of the globally installed `zotero-mcp` binary, point the client at the repo with `uv --directory ... run`.
+
+#### Step-by-step (OpenCode / ChatGPT-style local MCP config)
+
+1. Make sure the fork is up to date and its environment is installed:
+   ```bash
+   cd /home/sinnce/zotero-mcp
+   uv sync
+   ```
+2. Update your MCP client config so the Zotero server command is repo-pinned instead of using the stable global binary.
+3. For `opencode.json`, use this command array:
+   ```json
+   {
+     "mcp": {
+       "zotero": {
+         "type": "local",
+         "command": [
+           "/home/sinnce/.local/bin/uv",
+           "--directory",
+           "/home/sinnce/zotero-mcp",
+           "run",
+           "zotero-mcp",
+           "serve",
+           "--transport",
+           "stdio"
+         ],
+         "environment": {
+           "ZOTERO_LOCAL": "true",
+           "ZOTERO_LIBRARY_ID": "0"
+         },
+         "enabled": true
+       }
+     }
+   }
+   ```
+4. Restart the MCP client so it drops the old stdio process and reconnects to the fork.
+5. Verify the forked CLI directly before relying on the client:
+   ```bash
+   cd /home/sinnce/zotero-mcp
+   uv run zotero-mcp version
+   uv run python -m zotero_mcp.cli serve --transport stdio
+   ```
+   You should see the FastMCP banner and `Starting Zotero MCP server...` before the short-lived verification process exits.
+
+### Unpaywall setup and verification (step by step)
+
+Unpaywall does **not** use API keys. The API identifies callers by email, so the practical "registration" step is choosing the email address you want sent with each request.
+
+#### 1) Pick the email to use with Unpaywall
+
+- Use a real email address you control.
+- No separate approval flow is required for normal API usage.
+- Stay within the polite-pool guidance: approximately **100,000 requests/day per email**.
+
+#### 2) Save that email in Zotero MCP config
+
+Add `acquisition.unpaywall_email` to `~/.config/zotero-mcp/config.json`:
+
+```json
+{
+  "semantic_search": {
+    "embedding_model": "gemini"
+  },
+  "acquisition": {
+    "unpaywall_email": "you@example.com",
+    "institutional_access": {
+      "enabled": false,
+      "ezproxy_prefix": "proxy.yourlib.edu",
+      "openurl_base": ""
+    },
+    "extraction": {
+      "default_backend": "pdfminer",
+      "ocr_fallback": false
+    },
+    "download": {
+      "timeout_seconds": 30,
+      "max_size_mb": 100
+    }
+  }
+}
+```
+
+#### 3) Verify the email works against the live Unpaywall API
+
+Use a known DOI and make a direct request:
+
+```bash
+curl "https://api.unpaywall.org/v2/10.1038/nature12373?email=you@example.com"
+```
+
+What to check in the JSON response:
+
+- `is_oa: true` for an open-access example DOI
+- `best_oa_location` present
+- `best_oa_location.url_for_pdf` present when a direct PDF is available
+
+#### 4) Verify the MCP path after the direct API check
+
+After restarting your MCP client, run `resolve_paper_access` with the same DOI. A healthy result should include:
+
+- `Identifier: doi:10.1038/nature12373`
+- `Locations found: ...`
+- `Best URL: ...`
+- `Access method: oa`
+
+#### 5) Verify the repo implementation before live client use
+
+These targeted tests cover the Unpaywall client and the MCP resolve tool wrapper:
+
+```bash
+cd /home/sinnce/zotero-mcp
+uv run pytest tests/test_unpaywall.py tests/test_tool_resolve.py
+```
+
+If you are also testing institutional access, the Unpaywall steps above are still enough for OA verification, but campus-proxy verification may require your institution-authenticated browser/profile.
+
 ## 🧪 Testing
 
 ### Unit Tests
