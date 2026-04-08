@@ -174,12 +174,12 @@ def test_existing_tools_unaffected():
     """AC8: Existing semantic-search tools still importable and functional."""
     try:
         from zotero_mcp.tools.search import (
-            zotero_advanced_search,
-            zotero_search_items,
+            advanced_search,
+            search_items,
         )
 
-        assert callable(zotero_search_items)
-        assert callable(zotero_advanced_search)
+        assert callable(search_items)
+        assert callable(advanced_search)
     except ImportError as e:
         pytest.fail(f"Existing tools broken by changes: {e}")
 
