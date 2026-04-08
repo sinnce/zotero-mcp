@@ -18,6 +18,11 @@ def build_ezproxy_url(url: str, proxy_prefix: str) -> str:
     return urlunparse((parsed.scheme, new_netloc, parsed.path, parsed.params, parsed.query, parsed.fragment))
 
 
+def build_libproxy_url(url: str, base_url: str) -> str:
+    params = urlencode({"url": url})
+    return f"{base_url}?{params}"
+
+
 def build_openurl(doi: str, metadata: dict) -> str:
     params: dict[str, str] = {"rft_id": f"doi:{doi}", "rft.genre": "article"}
     if metadata.get("title"):
@@ -38,12 +43,25 @@ class InstitutionalResolver:
         if not inst.enabled:
             return AccessResolution(identifier_type="doi", identifier_value=doi)
 
-        if not inst.ezproxy_prefix:
-            raise ConfigError("institutional_access.ezproxy_prefix must be set when enabled=True")
-
         doi_url = f"https://doi.org/{doi}"
-        proxied = build_ezproxy_url(doi_url, inst.ezproxy_prefix)
-        locations = [AccessLocation(url=proxied, access_method="institutional")]
+
+        if inst.provider == "libproxy":
+            if not inst.libproxy_base_url:
+                raise ConfigError("institutional_access.libproxy_base_url must be set when provider='libproxy'")
+            proxied = build_libproxy_url(doi_url, inst.libproxy_base_url)
+            locations = [
+                AccessLocation(
+                    url=proxied,
+                    access_method="institutional",
+                    requires_session=True,
+                    session_kind="libproxy",
+                )
+            ]
+        else:
+            if not inst.ezproxy_prefix:
+                raise ConfigError("institutional_access.ezproxy_prefix must be set when enabled=True")
+            proxied = build_ezproxy_url(doi_url, inst.ezproxy_prefix)
+            locations = [AccessLocation(url=proxied, access_method="institutional")]
 
         return AccessResolution(
             identifier_type="doi",

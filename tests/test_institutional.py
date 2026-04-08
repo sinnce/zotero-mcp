@@ -1,7 +1,13 @@
 import pytest
-from zotero_mcp.acquisition.institutional import InstitutionalResolver, build_openurl, build_ezproxy_url, ConfigError
+from zotero_mcp.acquisition.institutional import (
+    InstitutionalResolver,
+    build_openurl,
+    build_ezproxy_url,
+    build_libproxy_url,
+    ConfigError,
+)
 from zotero_mcp.acquisition.config import AcquisitionConfig, InstitutionalConfig
-from zotero_mcp.acquisition.types import AccessResolution
+from zotero_mcp.acquisition.types import AccessResolution, AccessLocation
 
 
 class TestEZproxyURL:
@@ -117,3 +123,82 @@ class TestInstitutionalResolver:
         result = asyncio.run(resolver.resolve("10.1038/nature12373", {}))
         assert result.identifier_type == "doi"
         assert result.identifier_value == "10.1038/nature12373"
+
+
+class TestLibproxyURL:
+    def test_basic_url(self):
+        result = build_libproxy_url("https://doi.org/10.1038/nature12373", "https://libproxy.snu.ac.kr/link.n2s")
+        assert "libproxy.snu.ac.kr/link.n2s" in result
+        assert "url=" in result
+        assert "doi.org" in result
+
+    def test_url_encoded(self):
+        result = build_libproxy_url("https://example.com/path?q=1", "https://proxy.edu/link.n2s")
+        assert "%3A" in result or "%2F" in result
+
+    def test_base_url_preserved(self):
+        result = build_libproxy_url("https://doi.org/10.1234/test", "https://libproxy.example.edu/link.n2s")
+        assert result.startswith("https://libproxy.example.edu/link.n2s?")
+
+
+class TestLibproxyResolver:
+    def test_libproxy_returns_session_required(self):
+        config = AcquisitionConfig(
+            institutional_access=InstitutionalConfig(
+                enabled=True,
+                provider="libproxy",
+                libproxy_base_url="https://libproxy.snu.ac.kr/link.n2s",
+            )
+        )
+        resolver = InstitutionalResolver(config)
+        import asyncio
+
+        result = asyncio.run(resolver.resolve("10.1038/nature12373", {}))
+        assert len(result.locations) >= 1
+        assert result.locations[0].requires_session is True
+        assert result.locations[0].session_kind == "libproxy"
+
+    def test_libproxy_no_base_url_raises(self):
+        config = AcquisitionConfig(
+            institutional_access=InstitutionalConfig(
+                enabled=True,
+                provider="libproxy",
+                libproxy_base_url="",
+            )
+        )
+        resolver = InstitutionalResolver(config)
+        import asyncio
+
+        with pytest.raises(ConfigError):
+            asyncio.run(resolver.resolve("10.xxx/test", {}))
+
+    def test_libproxy_url_contains_doi(self):
+        config = AcquisitionConfig(
+            institutional_access=InstitutionalConfig(
+                enabled=True,
+                provider="libproxy",
+                libproxy_base_url="https://libproxy.snu.ac.kr/link.n2s",
+            )
+        )
+        resolver = InstitutionalResolver(config)
+        import asyncio
+
+        result = asyncio.run(resolver.resolve("10.1038/nature12373", {}))
+        assert "10.1038" in result.locations[0].url
+
+    def test_default_provider_is_ezproxy(self):
+        config = AcquisitionConfig(
+            institutional_access=InstitutionalConfig(
+                enabled=True,
+                ezproxy_prefix="proxy.university.edu",
+            )
+        )
+        assert config.institutional_access.provider == "ezproxy"
+
+    def test_access_location_session_fields(self):
+        loc = AccessLocation(
+            url="https://example.com", access_method="institutional", requires_session=True, session_kind="libproxy"
+        )
+        d = loc.to_dict()
+        assert d["requires_session"] is True
+        assert d["session_kind"] == "libproxy"

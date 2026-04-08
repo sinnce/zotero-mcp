@@ -409,6 +409,22 @@ Add an `acquisition` section to `~/.config/zotero-mcp/config.json`:
 
 All fields are optional with sensible defaults.
 
+**LibProxy configuration:**
+
+```json
+{
+  "acquisition": {
+    "institutional_access": {
+      "enabled": true,
+      "provider": "libproxy",
+      "libproxy_base_url": "https://libproxy.snu.ac.kr/link.n2s"
+    }
+  }
+}
+```
+
+LibProxy redirects via query parameter (`?url=...`) and requires an authenticated browser session for access.
+
 ### Using this fork instead of the stable installed MCP
 
 If you are developing in a local clone (for example `/home/sinnce/zotero-mcp`) and want your MCP client to use the fork instead of the globally installed `zotero-mcp` binary, point the client at the repo with `uv --directory ... run`.

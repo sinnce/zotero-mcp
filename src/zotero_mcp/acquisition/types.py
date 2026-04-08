@@ -33,6 +33,8 @@ class AccessLocation:
     access_method: str
     license: str | None = None
     version: str | None = None
+    requires_session: bool = False
+    session_kind: str | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -40,6 +42,8 @@ class AccessLocation:
             "access_method": self.access_method,
             "license": self.license,
             "version": self.version,
+            "requires_session": self.requires_session,
+            "session_kind": self.session_kind,
         }
 
 

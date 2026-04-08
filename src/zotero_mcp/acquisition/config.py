@@ -16,6 +16,8 @@ class InstitutionalConfig:
     enabled: bool = False
     ezproxy_prefix: str = ""
     openurl_base: str = ""
+    provider: str = "ezproxy"
+    libproxy_base_url: str = ""
 
 
 @dataclass
@@ -62,6 +64,8 @@ def load_acquisition_config(config_path: Path | str | None = None) -> Acquisitio
         enabled=bool(inst_raw.get("enabled", False)),
         ezproxy_prefix=str(inst_raw.get("ezproxy_prefix", "")),
         openurl_base=str(inst_raw.get("openurl_base", "")),
+        provider=str(inst_raw.get("provider", "ezproxy")),
+        libproxy_base_url=str(inst_raw.get("libproxy_base_url", "")),
     )
 
     ext_raw = acq.get("extraction", {})
