@@ -13,7 +13,7 @@ from zotero_mcp.acquisition.types import (
 
 
 class TestProvenanceMetadata:
-    def test_has_exactly_8_fields(self):
+    def test_has_exactly_10_fields(self):
         import dataclasses
 
         fields = [f.name for f in dataclasses.fields(ProvenanceMetadata)]
@@ -26,6 +26,8 @@ class TestProvenanceMetadata:
             "fallback_reason",
             "license",
             "has_fulltext",
+            "quality_signal",
+            "bridge_session",
         }
         assert set(fields) == expected, f"Got fields: {fields}"
 
