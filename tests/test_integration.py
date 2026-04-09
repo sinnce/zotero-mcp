@@ -6,6 +6,9 @@ These tests require:
 - Network access (Unpaywall, arXiv APIs)
 
 Run with: pytest tests/test_integration.py -m integration -v
+
+Bridge end-to-end tests (mock-based, no live services required) run without -m:
+  pytest tests/test_integration.py -v -k "bridge_institutional"
 """
 
 from __future__ import annotations
@@ -14,7 +17,7 @@ import asyncio
 import os
 import tempfile
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -266,3 +269,43 @@ def test_4_new_tools_registered():
 
     total = asyncio.run(check())
     assert total >= 4, f"Expected ≥4 tools total, got {total}"
+
+
+@pytest.mark.asyncio
+async def test_bridge_institutional():
+    from zotero_mcp.acquisition.bridge_client import BridgeDownloadResult
+    from zotero_mcp.acquisition.types import AccessLocation, AccessResolution
+    from zotero_mcp.tools.acquire_paper import acquire_paper
+
+    loc = AccessLocation(
+        url="https://libproxy.snu.ac.kr/link.n2s?url=https://publisher.example.com/10.xxx/institutional-only",
+        access_method="institutional",
+        requires_session=True,
+        session_kind="libproxy",
+    )
+    resolution = AccessResolution(
+        identifier_type="doi",
+        identifier_value="10.xxx/institutional-only",
+        locations=[loc],
+        best_location=loc,
+    )
+    bridge_result = BridgeDownloadResult(
+        status="complete",
+        auth_state="ready",
+        file_path="/tmp/test.pdf",
+    )
+
+    with (
+        patch("zotero_mcp.tools.acquire_paper.resolve_access", new=AsyncMock(return_value=resolution)),
+        patch("zotero_mcp.tools.acquire_paper.BridgeClient") as MockBridgeClient,
+    ):
+        mock_bridge = MagicMock()
+        mock_bridge.is_available.return_value = True
+        mock_bridge.download.return_value = bridge_result
+        MockBridgeClient.return_value = mock_bridge
+
+        result = await acquire_paper("10.xxx/institutional-only", session_name="libproxy-snu")
+
+    assert result["status"] == "complete"
+    assert result["file_path"] == "/tmp/test.pdf"
+    assert result["provenance"]["bridge_session"] == "libproxy-snu"
