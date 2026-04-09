@@ -20,4 +20,5 @@ from zotero_mcp.tools import (  # noqa: F401
     download_paper_artifact,
     extract_paper_content,
     ingest_paper_to_zotero,
+    acquire_paper,
 )

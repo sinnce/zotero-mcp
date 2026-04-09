@@ -13,6 +13,8 @@ class ProvenanceMetadata:
     fallback_reason: str | None = None
     license: str | None = None
     has_fulltext: bool | None = None
+    quality_signal: str | None = None
+    bridge_session: str | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -24,6 +26,8 @@ class ProvenanceMetadata:
             "fallback_reason": self.fallback_reason,
             "license": self.license,
             "has_fulltext": self.has_fulltext,
+            "quality_signal": self.quality_signal,
+            "bridge_session": self.bridge_session,
         }
 
 

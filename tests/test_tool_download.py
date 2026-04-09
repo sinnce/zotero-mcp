@@ -3,6 +3,8 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch, MagicMock
 from zotero_mcp.tools.download_paper_artifact import download_paper_artifact
 from zotero_mcp.acquisition.types import ArtifactDownload, PipelineError, ProvenanceMetadata
+from zotero_mcp.acquisition.bridge_client import BridgeClient, BridgeDownloadRequest, BridgeDownloadResult
+from zotero_mcp.acquisition.types import AccessResolution, AccessLocation
 
 
 @pytest.fixture
@@ -66,3 +68,109 @@ class TestDownloadPaperArtifact:
         ):
             result = await download_paper_artifact("https://example.com/paper.pdf", ctx=mock_ctx)
         assert "12" in result
+
+
+@pytest.mark.asyncio
+class TestBridgeFallback:
+    def _make_resolution(
+        self, requires_session: bool, url: str = "https://proxy.example.com/paper.pdf"
+    ) -> AccessResolution:
+        loc = AccessLocation(
+            url=url,
+            access_method="institutional",
+            requires_session=requires_session,
+            session_kind="libproxy",
+        )
+        return AccessResolution(
+            identifier_type="doi",
+            identifier_value="10.1234/test",
+            locations=[loc],
+            best_location=loc,
+        )
+
+    async def test_bridge_fallback_triggered(self, tmp_path):
+        resolution = self._make_resolution(requires_session=True)
+        bridge_result = BridgeDownloadResult(
+            status="complete",
+            auth_state="ready",
+            file_path=str(tmp_path / "paper.pdf"),
+        )
+
+        with (
+            patch("zotero_mcp.tools.acquire_paper.resolve_access", new=AsyncMock(return_value=resolution)),
+            patch("zotero_mcp.tools.acquire_paper.BridgeClient") as MockBridge,
+        ):
+            mock_instance = MagicMock()
+            mock_instance.is_available.return_value = True
+            mock_instance.download.return_value = bridge_result
+            MockBridge.return_value = mock_instance
+
+            from zotero_mcp.tools.acquire_paper import acquire_paper
+
+            result = await acquire_paper("10.1234/test", session_name="libproxy-snu")
+
+        assert result["status"] == "complete"
+        assert result["provenance"]["bridge_session"] == "libproxy-snu"
+        assert result["provenance"]["access_source"] == "institutional"
+        mock_instance.download.assert_called_once()
+        call_arg = mock_instance.download.call_args[0][0]
+        assert call_arg.session_name == "libproxy-snu"
+        assert call_arg.candidate_url == resolution.best_location.url
+
+    async def test_http_path_when_bridge_unavailable(self, tmp_path):
+        resolution = self._make_resolution(requires_session=True)
+        mock_artifact = ArtifactDownload(
+            file_path=tmp_path / "paper.pdf",
+            content_type="application/pdf",
+            size_bytes=1024,
+        )
+
+        with (
+            patch("zotero_mcp.tools.acquire_paper.resolve_access", new=AsyncMock(return_value=resolution)),
+            patch("zotero_mcp.tools.acquire_paper.BridgeClient") as MockBridge,
+            patch("zotero_mcp.tools.acquire_paper.ArtifactDownloader") as MockDownloader,
+        ):
+            mock_bridge = MagicMock()
+            mock_bridge.is_available.return_value = False
+            MockBridge.return_value = mock_bridge
+
+            mock_dl = MagicMock()
+            mock_dl.download = AsyncMock(return_value=mock_artifact)
+            MockDownloader.return_value = mock_dl
+
+            from zotero_mcp.tools.acquire_paper import acquire_paper
+
+            result = await acquire_paper("10.1234/test", session_name="libproxy-snu")
+
+        assert result["status"] == "complete"
+        assert result["message"] == "Downloaded via HTTP"
+        mock_dl.download.assert_called_once()
+
+    async def test_http_path_unaffected(self, tmp_path):
+        resolution = self._make_resolution(requires_session=False, url="https://arxiv.org/pdf/2301.00001.pdf")
+        mock_artifact = ArtifactDownload(
+            file_path=tmp_path / "paper.pdf",
+            content_type="application/pdf",
+            size_bytes=2048,
+        )
+
+        with (
+            patch("zotero_mcp.tools.acquire_paper.resolve_access", new=AsyncMock(return_value=resolution)),
+            patch("zotero_mcp.tools.acquire_paper.BridgeClient") as MockBridge,
+            patch("zotero_mcp.tools.acquire_paper.ArtifactDownloader") as MockDownloader,
+        ):
+            mock_bridge = MagicMock()
+            MockBridge.return_value = mock_bridge
+
+            mock_dl = MagicMock()
+            mock_dl.download = AsyncMock(return_value=mock_artifact)
+            MockDownloader.return_value = mock_dl
+
+            from zotero_mcp.tools.acquire_paper import acquire_paper
+
+            result = await acquire_paper("2301.00001")
+
+        assert result["status"] == "complete"
+        assert result["message"] == "Downloaded via HTTP"
+        mock_bridge.is_available.assert_not_called()
+        mock_dl.download.assert_called_once()
