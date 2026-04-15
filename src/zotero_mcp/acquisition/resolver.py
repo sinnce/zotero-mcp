@@ -12,6 +12,7 @@ from .unpaywall import UnpaywallClient
 from .arxiv import ArxivResolver
 from .institutional import InstitutionalResolver
 from .semantic_scholar import SemanticScholarResolver
+from .pmc_oa import PMCOAResolver
 from .config import AcquisitionConfig, load_acquisition_config
 from .types import AccessResolution
 
@@ -115,6 +116,12 @@ async def resolve_access(
         for k, v in s2_result.metadata.items():
             if k not in metadata:
                 metadata[k] = v
+
+        pmc = PMCOAResolver(config)
+        pmc_result = await pmc.resolve(canonical.value)
+        locations.extend(pmc_result.locations)
+        if best_location is None and pmc_result.best_location:
+            best_location = pmc_result.best_location
 
     elif canonical.type == "arxiv":
         resolver = ArxivResolver()

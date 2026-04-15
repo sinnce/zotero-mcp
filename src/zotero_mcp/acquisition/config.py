@@ -40,6 +40,8 @@ class AcquisitionConfig:
     download: DownloadConfig = field(default_factory=DownloadConfig)
     s2_enabled: bool = True
     s2_api_key: str = ""
+    pmc_enabled: bool = True
+    ncbi_email: str = ""
 
 
 def load_acquisition_config(config_path: Path | str | None = None) -> AcquisitionConfig:

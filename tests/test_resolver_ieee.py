@@ -62,6 +62,10 @@ async def test_ieee_url_upgrades_to_doi_and_uses_unpaywall(httpx_mock: HTTPXMock
         identifier_type="doi",
         identifier_value="10.1109/TPAMI.2017.2699184",
     )
+    pmc_empty = AccessResolution(
+        identifier_type="doi",
+        identifier_value="10.1109/TPAMI.2017.2699184",
+    )
     with (
         patch(
             "zotero_mcp.acquisition.unpaywall.UnpaywallClient.resolve",
@@ -70,6 +74,10 @@ async def test_ieee_url_upgrades_to_doi_and_uses_unpaywall(httpx_mock: HTTPXMock
         patch(
             "zotero_mcp.acquisition.semantic_scholar.SemanticScholarResolver.resolve",
             new=AsyncMock(return_value=s2_empty),
+        ),
+        patch(
+            "zotero_mcp.acquisition.pmc_oa.PMCOAResolver.resolve",
+            new=AsyncMock(return_value=pmc_empty),
         ),
     ):
         result = await resolve_access("https://ieeexplore.ieee.org/document/7974879")
