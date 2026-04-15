@@ -386,6 +386,7 @@ These tools enable automated paper acquisition from open-access sources:
 - `download_paper_artifact`: Download a paper PDF from a URL with content validation
 - `extract_paper_content`: Extract text from a PDF or HTML file using the unified extraction registry
 - `ingest_paper_to_zotero`: Ingest a paper (with optional PDF) into your Zotero library
+- `acquire_paper`: End-to-end orchestration tool that runs resolve → download → ingest in one call. Pass a DOI, arXiv ID, or URL and get back a file path plus provenance metadata. Optionally pass `session_name` to route institutional downloads through the browser bridge (see below).
 
 ### Configuration (optional)
 Add an `acquisition` section to `~/.config/zotero-mcp/config.json`:
@@ -399,6 +400,13 @@ Add an `acquisition` section to `~/.config/zotero-mcp/config.json`:
       "enabled": false,
       "ezproxy_prefix": "proxy.yourlib.edu"
     },
+    "extraction": {
+      "default_backend": "pdfminer",
+      "ocr_fallback": false,
+      "ocr_model": "qwen/qwen3-vl-32b-instruct",
+      "openrouter_api_key": "",
+      "ocr_page_limit": 50
+    },
     "download": {
       "timeout_seconds": 30,
       "max_size_mb": 100
@@ -407,7 +415,7 @@ Add an `acquisition` section to `~/.config/zotero-mcp/config.json`:
 }
 ```
 
-All fields are optional with sensible defaults.
+All fields are optional with sensible defaults. The resolver chain tries Unpaywall, then Semantic Scholar, then PMC OA in order. Set `unpaywall_email` for Unpaywall polite-pool access and `ncbi_email` for NCBI rate-limit compliance.
 
 **LibProxy configuration:**
 
@@ -424,6 +432,139 @@ All fields are optional with sensible defaults.
 ```
 
 LibProxy redirects via query parameter (`?url=...`) and requires an authenticated browser session for access.
+
+### Institutional / Browser-Bridge Acquisition
+
+Some papers resolve to URLs that need an authenticated browser session, such as a campus proxy login. When `resolve_paper_access` returns a location with `requires_session: true`, `acquire_paper` can route the download through the deep-research bridge server instead of a plain HTTP fetch.
+
+**How it works:**
+
+1. `acquire_paper` calls `resolve_paper_access` to find the best URL for the identifier.
+2. If the resolved location requires a session and you pass `session_name`, it checks whether the bridge server is running at `http://127.0.0.1:9870`.
+3. If the bridge is available, it sends a `POST /bridge/download` request with the DOI, candidate URL, and session name. The bridge server handles navigation and PDF download inside the named browser session.
+4. If the bridge is unavailable or `session_name` is omitted, acquisition falls back to the standard HTTP download path. Nothing breaks; you just won't get paywalled PDFs.
+
+**Usage example:**
+
+```python
+# Via MCP tool call
+acquire_paper(
+    identifier="10.1016/j.cell.2023.01.001",
+    session_name="libproxy-snu",
+)
+```
+
+The session name is a logical label for a named browser profile managed by the deep-research bridge server (part of `packages/opencode-deep-research`). `"libproxy-snu"` is the default session name for SNU campus proxy access.
+
+**Provenance:** When a download goes through the bridge, the result includes `provenance.bridge_session` set to the session name and `provenance.access_source` set to `"institutional"`. Standard HTTP downloads record only `access_source`.
+
+**What the bridge does not do:** It does not automate SAML or Shibboleth login flows. The browser session must already be authenticated before you call `acquire_paper`. The bridge only navigates to the resolved URL and downloads the PDF.
+
+**Bridge endpoint reference:**
+
+| Field | Value |
+|-------|-------|
+| Default base URL | `http://127.0.0.1:9870` |
+| Download endpoint | `POST /bridge/download` |
+| Health check | `GET /bridge/health` |
+| Session identifier | `session_name` string (e.g. `"libproxy-snu"`) |
+
+### Development Setup (Dev Checkout)
+
+Use this section when you want to run the fork directly from a local clone, for example to test new acquisition features before they're published to PyPI.
+
+**Prerequisites:** Python 3.11+, [uv](https://docs.astral.sh/uv/)
+
+**Clone and install:**
+
+```bash
+git clone https://github.com/your-fork/zotero-mcp /home/sinnce/zotero-mcp
+cd /home/sinnce/zotero-mcp
+uv sync
+
+# Optional: install VLM OCR support (adds marker-pdf and PyTorch)
+uv sync --extra ocr
+```
+
+**Configure acquisition features** in `~/.config/zotero-mcp/config.json`:
+
+```json
+{
+  "semantic_search": {
+    "embedding_model": "gemini"
+  },
+  "acquisition": {
+    "unpaywall_email": "you@example.com",
+    "s2_enabled": true,
+    "s2_api_key": "",
+    "pmc_enabled": true,
+    "ncbi_email": "you@example.com",
+    "auto_ingest": false,
+    "institutional_access": {
+      "enabled": false,
+      "provider": "libproxy",
+      "libproxy_base_url": "https://libproxy.snu.ac.kr/link.n2s"
+    },
+    "extraction": {
+      "default_backend": "pdfminer",
+      "ocr_fallback": false,
+      "ocr_model": "qwen/qwen3-vl-32b-instruct",
+      "openrouter_api_key": "",
+      "ocr_page_limit": 50
+    },
+    "download": {
+      "timeout_seconds": 30,
+      "max_size_mb": 100
+    }
+  }
+}
+```
+
+**Acquisition config fields:**
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `unpaywall_email` | `""` | Email sent with Unpaywall API requests (no key needed, just an email) |
+| `s2_enabled` | `true` | Enable Semantic Scholar OA resolver |
+| `s2_api_key` | `""` | Optional S2 API key for higher rate limits (100 req/5min without key) |
+| `pmc_enabled` | `true` | Enable PubMed Central OA resolver |
+| `ncbi_email` | `""` | Recommended for NCBI API polite pool |
+| `auto_ingest` | `false` | Auto-ingest acquired paper into Zotero after download |
+| `extraction.ocr_fallback` | `false` | Enable VLM OCR for scanned/image PDFs (requires `[ocr]` extra and `openrouter_api_key`) |
+| `extraction.ocr_model` | `"qwen/qwen3-vl-32b-instruct"` | OpenRouter model for OCR |
+| `extraction.openrouter_api_key` | `""` | Required when `ocr_fallback` is true |
+| `extraction.ocr_page_limit` | `50` | Max pages to process with OCR |
+
+Note: `s2_enabled`, `pmc_enabled`, `auto_ingest`, and `ncbi_email` are dataclass defaults. Config-file loading for these fields is planned but not yet wired; set them in code or environment for now.
+
+**Run the MCP server from the checkout:**
+
+```bash
+uv --directory /home/sinnce/zotero-mcp run zotero-mcp serve --transport stdio
+```
+
+**Verify the import works:**
+
+```bash
+cd /home/sinnce/zotero-mcp
+uv run python -c "import zotero_mcp; print('import ok')"
+uv run zotero-mcp version
+```
+
+**Run tests:**
+
+```bash
+cd /home/sinnce/zotero-mcp
+uv run pytest tests/ -q
+```
+
+**New acquisition features in this fork:**
+
+- **Semantic Scholar resolver** (`s2_enabled`): Queries the S2 Graph API for open-access PDFs after Unpaywall. Supports optional API key for higher rate limits.
+- **PMC OA resolver** (`pmc_enabled`): Two-step lookup via NCBI ID Converter then PMC OA API. Finds PDFs for PubMed Central open-access articles.
+- **VLM OCR fallback** (`ocr_fallback`): Uses marker-pdf with an OpenRouter-hosted vision model to extract text from scanned PDFs. Pure Python, no system binaries like Tesseract needed.
+- **Auto-ingest** (`auto_ingest`): When enabled, `acquire_paper` automatically ingests the downloaded paper into your Zotero library and returns the item key.
+- **Browser bridge**: `acquire_paper` accepts a `session_name` parameter to route institutional downloads through the deep-research bridge server (see "Institutional / Browser-Bridge Acquisition" above).
 
 ### Using this fork instead of the stable installed MCP
 
