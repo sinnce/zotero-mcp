@@ -11,6 +11,7 @@ from .identifier import CanonicalId, NormalizationError, normalize
 from .unpaywall import UnpaywallClient
 from .arxiv import ArxivResolver
 from .institutional import InstitutionalResolver
+from .semantic_scholar import SemanticScholarResolver
 from .config import AcquisitionConfig, load_acquisition_config
 from .types import AccessResolution
 
@@ -105,6 +106,15 @@ async def resolve_access(
         locations.extend(result.locations)
         best_location = result.best_location
         metadata.update(result.metadata)
+
+        s2 = SemanticScholarResolver(config)
+        s2_result = await s2.resolve(canonical.value)
+        locations.extend(s2_result.locations)
+        if best_location is None and s2_result.best_location:
+            best_location = s2_result.best_location
+        for k, v in s2_result.metadata.items():
+            if k not in metadata:
+                metadata[k] = v
 
     elif canonical.type == "arxiv":
         resolver = ArxivResolver()

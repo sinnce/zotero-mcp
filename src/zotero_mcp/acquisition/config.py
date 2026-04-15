@@ -38,6 +38,8 @@ class AcquisitionConfig:
     institutional_access: InstitutionalConfig = field(default_factory=InstitutionalConfig)
     extraction: ExtractionConfig = field(default_factory=ExtractionConfig)
     download: DownloadConfig = field(default_factory=DownloadConfig)
+    s2_enabled: bool = True
+    s2_api_key: str = ""
 
 
 def load_acquisition_config(config_path: Path | str | None = None) -> AcquisitionConfig:
