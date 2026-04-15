@@ -24,6 +24,9 @@ class InstitutionalConfig:
 class ExtractionConfig:
     default_backend: str = "pdfminer"
     ocr_fallback: bool = False
+    ocr_model: str = "qwen/qwen3-vl-32b-instruct"
+    openrouter_api_key: str = ""
+    ocr_page_limit: int = 50
 
 
 @dataclass
@@ -76,6 +79,9 @@ def load_acquisition_config(config_path: Path | str | None = None) -> Acquisitio
     extraction = ExtractionConfig(
         default_backend=str(ext_raw.get("default_backend", "pdfminer")),
         ocr_fallback=bool(ext_raw.get("ocr_fallback", False)),
+        ocr_model=str(ext_raw.get("ocr_model", "qwen/qwen3-vl-32b-instruct")),
+        openrouter_api_key=str(ext_raw.get("openrouter_api_key", "")),
+        ocr_page_limit=int(ext_raw.get("ocr_page_limit", 50)),
     )
 
     dl_raw = acq.get("download", {})

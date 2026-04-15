@@ -44,6 +44,9 @@ pdf = [
 scite = [
     "requests>=2.28.0",
 ]
+ocr = [
+    "marker-pdf>=1.0",
+]
 all = [
     "zotero-mcp-server[semantic,pdf,scite]",
 ]
