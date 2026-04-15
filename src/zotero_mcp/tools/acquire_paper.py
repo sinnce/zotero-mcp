@@ -1,4 +1,5 @@
 from __future__ import annotations
+import logging
 import tempfile
 from pathlib import Path
 from zotero_mcp._app import mcp
@@ -7,13 +8,57 @@ from zotero_mcp.acquisition.resolver import resolve_access
 from zotero_mcp.acquisition.config import load_acquisition_config
 from zotero_mcp.acquisition.bridge_client import BridgeClient, BridgeDownloadRequest
 from zotero_mcp.acquisition.download import ArtifactDownloader
-from zotero_mcp.acquisition.types import PipelineError
+from zotero_mcp.acquisition.ingest import ingest_paper
+from zotero_mcp.acquisition.types import PipelineError, ProvenanceMetadata
+from zotero_mcp.tools._helpers import _get_write_client
+
+logger = logging.getLogger(__name__)
+
+
+def _run_auto_ingest(ctx, resolution, file_path, identifier):
+    meta = resolution.metadata or {}
+    title = meta.get("title")
+    if not title:
+        logger.warning("auto_ingest: skipping — no title in metadata for %s", identifier)
+        return None
+
+    prov = ProvenanceMetadata(
+        access_source=resolution.best_location.access_method if resolution.best_location else None,
+    )
+
+    doi = resolution.identifier_value if resolution.identifier_type == "doi" else None
+
+    try:
+        read_zot, write_zot = _get_write_client(ctx)
+    except Exception as exc:
+        logger.warning("auto_ingest: skipping — cannot get write client: %s", exc)
+        return None
+
+    result = ingest_paper(
+        write_zot=write_zot,
+        read_zot=read_zot,
+        title=title,
+        doi=doi,
+        authors=meta.get("authors"),
+        journal=meta.get("journal"),
+        year=meta.get("year"),
+        abstract=meta.get("abstract"),
+        file_path=Path(file_path) if file_path else None,
+        provenance=prov,
+    )
+
+    if isinstance(result, PipelineError):
+        logger.warning("auto_ingest: ingest failed [%s]: %s", result.code, result.message)
+        return None
+
+    return result.item_key
 
 
 @mcp.tool()
 async def acquire_paper(
     identifier: str,
     session_name: str | None = None,
+    auto_ingest: bool = False,
     ctx: Context = None,
 ) -> dict:
     config = load_acquisition_config()
@@ -35,7 +80,7 @@ async def acquire_paper(
                 )
             )
             if result.status == "complete" and result.file_path:
-                return {
+                out = {
                     "status": "complete",
                     "file_path": result.file_path,
                     "provenance": {
@@ -44,6 +89,11 @@ async def acquire_paper(
                     },
                     "message": f"Downloaded via bridge session '{session_name}'",
                 }
+                if auto_ingest:
+                    item_key = _run_auto_ingest(ctx, resolution, result.file_path, identifier)
+                    if item_key:
+                        out["zotero_item_key"] = item_key
+                return out
 
     downloader = ArtifactDownloader(config)
     dest_dir = Path(tempfile.mkdtemp(prefix="zotero-mcp-acquire-"))
@@ -52,9 +102,16 @@ async def acquire_paper(
     if isinstance(download_result, PipelineError):
         return {"status": "failed", "message": f"[{download_result.code}] {download_result.message}"}
 
-    return {
+    out = {
         "status": "complete",
         "file_path": str(download_result.file_path),
         "provenance": {"access_source": location.access_method or "url"},
         "message": "Downloaded via HTTP",
     }
+
+    if auto_ingest:
+        item_key = _run_auto_ingest(ctx, resolution, download_result.file_path, identifier)
+        if item_key:
+            out["zotero_item_key"] = item_key
+
+    return out

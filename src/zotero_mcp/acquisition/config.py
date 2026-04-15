@@ -45,6 +45,7 @@ class AcquisitionConfig:
     s2_api_key: str = ""
     pmc_enabled: bool = True
     ncbi_email: str = ""
+    auto_ingest: bool = False
 
 
 def load_acquisition_config(config_path: Path | str | None = None) -> AcquisitionConfig:
