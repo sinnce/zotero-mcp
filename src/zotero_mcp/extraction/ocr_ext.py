@@ -14,7 +14,7 @@ def _marker_available() -> bool:
         import marker  # noqa: F401
 
         return True
-    except (ImportError, Exception):
+    except Exception:
         return False
 
 

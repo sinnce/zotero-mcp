@@ -1,4 +1,3 @@
-import pytest
 from zotero_mcp.acquisition.provenance_parser import (
     parse_provenance_from_extra,
     serialize_provenance_to_extra,

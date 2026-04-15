@@ -10,7 +10,6 @@ from zotero_mcp.acquisition.types import (
     AccessResolution,
     ArtifactDownload,
     IngestResult,
-    ProvenanceMetadata,
 )
 
 
