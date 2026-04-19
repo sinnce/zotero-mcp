@@ -197,3 +197,46 @@ class TestAcquireIngest:
         assert result["status"] == "complete"
         assert "zotero_item_key" not in result
         mock_ingest.assert_not_called()
+
+    async def test_auto_ingest_inherits_config_when_omitted(self, mock_ctx):
+        resolution = make_resolution(metadata={"title": "Config Enabled"})
+        download = make_download_result()
+        ingest_result = IngestResult(item_key="CONFIG_KEY")
+        mock_zot = make_mock_zotero("CONFIG_KEY")
+
+        with (
+            patch("zotero_mcp.tools.acquire_paper.load_acquisition_config") as mock_load_config,
+            patch("zotero_mcp.tools.acquire_paper.resolve_access", new=AsyncMock(return_value=resolution)),
+            patch("zotero_mcp.tools.acquire_paper.ArtifactDownloader") as mock_dl_cls,
+            patch("zotero_mcp.tools.acquire_paper._get_write_client", return_value=(mock_zot, mock_zot)),
+            patch("zotero_mcp.tools.acquire_paper.ingest_paper", return_value=ingest_result) as mock_ingest,
+        ):
+            from zotero_mcp.acquisition.config import AcquisitionConfig
+
+            mock_load_config.return_value = AcquisitionConfig(auto_ingest=True)
+            mock_dl_cls.return_value.download = AsyncMock(return_value=download)
+            result = await acquire_paper("10.1234/test", ctx=mock_ctx)
+
+        assert result["status"] == "complete"
+        assert result["zotero_item_key"] == "CONFIG_KEY"
+        mock_ingest.assert_called_once()
+
+    async def test_explicit_false_overrides_config_auto_ingest(self, mock_ctx):
+        resolution = make_resolution(metadata={"title": "Config Disabled"})
+        download = make_download_result()
+
+        with (
+            patch("zotero_mcp.tools.acquire_paper.load_acquisition_config") as mock_load_config,
+            patch("zotero_mcp.tools.acquire_paper.resolve_access", new=AsyncMock(return_value=resolution)),
+            patch("zotero_mcp.tools.acquire_paper.ArtifactDownloader") as mock_dl_cls,
+            patch("zotero_mcp.tools.acquire_paper.ingest_paper") as mock_ingest,
+        ):
+            from zotero_mcp.acquisition.config import AcquisitionConfig
+
+            mock_load_config.return_value = AcquisitionConfig(auto_ingest=True)
+            mock_dl_cls.return_value.download = AsyncMock(return_value=download)
+            result = await acquire_paper("10.1234/test", auto_ingest=False, ctx=mock_ctx)
+
+        assert result["status"] == "complete"
+        assert "zotero_item_key" not in result
+        mock_ingest.assert_not_called()

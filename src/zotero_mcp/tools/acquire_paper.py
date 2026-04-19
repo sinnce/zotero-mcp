@@ -58,10 +58,11 @@ def _run_auto_ingest(ctx, resolution, file_path, identifier):
 async def acquire_paper(
     identifier: str,
     session_name: str | None = None,
-    auto_ingest: bool = False,
+    auto_ingest: bool | None = None,
     ctx: Context = None,
 ) -> dict:
     config = load_acquisition_config()
+    effective_auto_ingest = config.auto_ingest if auto_ingest is None else auto_ingest
     resolution = await resolve_access(identifier, config)
 
     if not resolution or not resolution.best_location:
@@ -89,7 +90,7 @@ async def acquire_paper(
                     },
                     "message": f"Downloaded via bridge session '{session_name}'",
                 }
-                if auto_ingest:
+                if effective_auto_ingest:
                     item_key = _run_auto_ingest(ctx, resolution, result.file_path, identifier)
                     if item_key:
                         out["zotero_item_key"] = item_key
@@ -109,7 +110,7 @@ async def acquire_paper(
         "message": "Downloaded via HTTP",
     }
 
-    if auto_ingest:
+    if effective_auto_ingest:
         item_key = _run_auto_ingest(ctx, resolution, download_result.file_path, identifier)
         if item_key:
             out["zotero_item_key"] = item_key
