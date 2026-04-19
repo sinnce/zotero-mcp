@@ -96,4 +96,9 @@ def load_acquisition_config(config_path: Path | str | None = None) -> Acquisitio
         institutional_access=institutional,
         extraction=extraction,
         download=download,
+        s2_enabled=bool(acq.get("s2_enabled", True)),
+        s2_api_key=str(acq.get("s2_api_key", "")),
+        pmc_enabled=bool(acq.get("pmc_enabled", True)),
+        ncbi_email=str(acq.get("ncbi_email", "")),
+        auto_ingest=bool(acq.get("auto_ingest", False)),
     )
