@@ -2,6 +2,7 @@ from __future__ import annotations
 import logging
 import tempfile
 from pathlib import Path
+from urllib.parse import urlparse
 from zotero_mcp._app import mcp
 from fastmcp import Context
 from zotero_mcp.acquisition.resolver import resolve_access
@@ -13,6 +14,8 @@ from zotero_mcp.acquisition.types import PipelineError, ProvenanceMetadata
 from zotero_mcp.tools._helpers import _get_write_client
 
 logger = logging.getLogger(__name__)
+
+_EXPLICIT_PAYWALL_CODES = {"AUTH_REQUIRED", "HTML_LANDING", "ACCESS_DENIED"}
 
 
 def _run_auto_ingest(ctx, resolution, file_path, identifier):
@@ -54,12 +57,56 @@ def _run_auto_ingest(ctx, resolution, file_path, identifier):
     return result.item_key
 
 
+def _bridge_doi(identifier: str, resolution) -> str:
+    return resolution.identifier_value if resolution.identifier_type == "doi" else identifier
+
+
+def _is_explicit_paywall(result) -> bool:
+    return result.status == "auth_required" or result.error_code in _EXPLICIT_PAYWALL_CODES
+
+
+def _should_try_direct_before_libproxy(config, resolution, location, session_name: str | None) -> bool:
+    inst = config.institutional_access
+    return (
+        bool(session_name)
+        and resolution.identifier_type == "doi"
+        and location.requires_session
+        and location.session_kind == "libproxy"
+        and inst.enabled
+        and inst.provider == "libproxy"
+    )
+
+
+def _is_explicit_libproxy_url(config, location) -> bool:
+    inst = config.institutional_access
+    if not inst.enabled or inst.provider != "libproxy" or not inst.libproxy_base_url:
+        return False
+    try:
+        candidate = urlparse(location.url)
+        libproxy = urlparse(inst.libproxy_base_url)
+    except Exception:
+        return False
+    return bool(candidate.netloc and candidate.netloc == libproxy.netloc)
+
+
+def _build_bridge_output(result, session_name: str, access_source: str, message: str) -> dict:
+    return {
+        "status": "complete",
+        "file_path": result.file_path,
+        "provenance": {
+            "bridge_session": session_name,
+            "access_source": access_source,
+        },
+        "message": message,
+    }
+
+
 @mcp.tool()
 async def acquire_paper(
     identifier: str,
     session_name: str | None = None,
     auto_ingest: bool | None = None,
-    ctx: Context = None,
+    ctx: Context | None = None,
 ) -> dict:
     config = load_acquisition_config()
     effective_auto_ingest = config.auto_ingest if auto_ingest is None else auto_ingest
@@ -70,26 +117,57 @@ async def acquire_paper(
 
     location = resolution.best_location
 
-    if location.requires_session and session_name:
+    if session_name and (location.requires_session or _is_explicit_libproxy_url(config, location)):
         bridge = BridgeClient()
         if bridge.is_available():
-            result = bridge.download(
-                BridgeDownloadRequest(
-                    doi=identifier,
-                    candidate_url=location.url,
-                    session_name=session_name,
+            bridge_identifier = _bridge_doi(identifier, resolution)
+            result = None
+
+            if _should_try_direct_before_libproxy(config, resolution, location, session_name):
+                direct_result = bridge.download(
+                    BridgeDownloadRequest(
+                        doi=bridge_identifier,
+                        candidate_url=f"https://doi.org/{resolution.identifier_value}",
+                        session_name=session_name,
+                    )
                 )
-            )
-            if result.status == "complete" and result.file_path:
-                out = {
-                    "status": "complete",
-                    "file_path": result.file_path,
-                    "provenance": {
-                        "bridge_session": session_name,
-                        "access_source": "institutional",
-                    },
-                    "message": f"Downloaded via bridge session '{session_name}'",
-                }
+                if direct_result.status == "complete" and direct_result.file_path:
+                    out = _build_bridge_output(
+                        direct_result,
+                        session_name,
+                        access_source="direct",
+                        message="Downloaded via direct browser access",
+                    )
+                    if effective_auto_ingest:
+                        item_key = _run_auto_ingest(ctx, resolution, direct_result.file_path, identifier)
+                        if item_key:
+                            out["zotero_item_key"] = item_key
+                    return out
+
+                if _is_explicit_paywall(direct_result):
+                    result = bridge.download(
+                        BridgeDownloadRequest(
+                            doi=bridge_identifier,
+                            candidate_url=location.url,
+                            session_name=session_name,
+                        )
+                    )
+            else:
+                result = bridge.download(
+                    BridgeDownloadRequest(
+                        doi=bridge_identifier,
+                        candidate_url=location.url,
+                        session_name=session_name,
+                    )
+                )
+
+            if result and result.status == "complete" and result.file_path:
+                out = _build_bridge_output(
+                    result,
+                    session_name,
+                    access_source="institutional",
+                    message=f"Downloaded via bridge session '{session_name}'",
+                )
                 if effective_auto_ingest:
                     item_key = _run_auto_ingest(ctx, resolution, result.file_path, identifier)
                     if item_key:
