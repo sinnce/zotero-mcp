@@ -122,6 +122,40 @@ zotero-mcp update --check-only
 zotero-mcp update
 ```
 
+## Quick Usage by Role
+
+`zotero-mcp` is the MCP-facing backend in this workflow.
+
+- It **does own** the MCP tool list, Zotero library access, semantic search, paper acquisition, translation-server client integration, and the resolver chain that chooses between OA and institutional access.
+- It **does not own** the browser automation for session-gated downloads. When an institutional URL requires an authenticated browser session, it can call the bridge server exposed by `packages/opencode-deep-research`.
+- Zotero **translation-server** is a separate HTTP service, not part of Zotero desktop and not part of this package. `zotero-mcp` only talks to it as a client.
+
+### Local MCP server
+
+```bash
+uv run zotero-mcp serve --transport stdio
+```
+
+### Optional translation-server helper
+
+If you want URL-to-metadata translation through Zotero translators, run translation-server separately and let `zotero-mcp` talk to it over HTTP:
+
+```bash
+# default endpoint expected by zotero-mcp
+export ZOTERO_TRANSLATION_SERVER_URL=http://127.0.0.1:1969
+```
+
+Use the MCP tools `translation_server_status` and `translate_with_translation_server` to verify that service.
+
+### Optional browser bridge for institutional PDFs
+
+If you want `acquire_paper` to fetch through a campus proxy or other session-gated flow, start the bridge server from `packages/opencode-deep-research` and pass `session_name` to `acquire_paper`.
+
+The ownership split is:
+
+- `zotero-mcp`: resolve access and decide whether a session-backed location should be used
+- `opencode-deep-research`: keep the named browser session alive and perform the download
+
 ## 🧠 Semantic Search
 
 Zotero MCP now includes powerful AI-powered semantic search capabilities that let you find research based on concepts and meaning, not just keywords.
@@ -377,16 +411,36 @@ The first time you use PDF annotation features, the necessary tools will be auto
 - `zotero_get_pdf_outline`: Extract the table of contents / outline from a PDF attachment
 - `zotero_search_by_citation_key`: Look up items by BetterBibTeX citation key (with Extra field fallback)
 
+### 🔌 Connector Compatibility Tools
+- `search`: ChatGPT-compatible search wrapper for MCP connectors
+- `fetch`: ChatGPT-compatible fetch wrapper for MCP connectors
+
 ## 📥 Paper Acquisition Tools (PKB-1)
 
-These tools enable automated paper acquisition from open-access sources:
+These tools enable automated paper acquisition from public and institutional sources.
 
 ### New Tools
-- `resolve_paper_access`: Resolve a DOI, arXiv ID, or URL to open-access PDF locations via Unpaywall and arXiv
+- `resolve_paper_access`: Resolve a DOI, arXiv ID, or URL to access locations using the current resolver stack
 - `download_paper_artifact`: Download a paper PDF from a URL with content validation
 - `extract_paper_content`: Extract text from a PDF or HTML file using the unified extraction registry
 - `ingest_paper_to_zotero`: Ingest a paper (with optional PDF) into your Zotero library
 - `acquire_paper`: End-to-end orchestration tool that runs resolve → download → ingest in one call. Pass a DOI, arXiv ID, or URL and get back a file path plus provenance metadata. Optionally pass `session_name` to route institutional downloads through the browser bridge (see below).
+
+### Resolver workflow
+
+The current source-level resolver flow is:
+
+1. normalize the incoming DOI / arXiv ID / URL,
+2. if the input is a URL, optionally ask a running Zotero translation-server for metadata and PDF attachments,
+3. if the identifier becomes a DOI, try Unpaywall, then Semantic Scholar, then PMC OA,
+4. if institutional access is enabled, append the institutional location,
+5. if `acquire_paper` sees `requires_session=true` and you passed `session_name`, call the local bridge server before falling back to direct HTTP download.
+
+This decision logic lives in:
+
+- `src/zotero_mcp/acquisition/resolver.py`
+- `src/zotero_mcp/acquisition/institutional.py`
+- `src/zotero_mcp/tools/acquire_paper.py`
 
 ### Configuration (optional)
 Add an `acquisition` section to `~/.config/zotero-mcp/config.json`:
@@ -415,7 +469,7 @@ Add an `acquisition` section to `~/.config/zotero-mcp/config.json`:
 }
 ```
 
-All fields are optional with sensible defaults. The resolver chain tries Unpaywall, then Semantic Scholar, then PMC OA in order. Set `unpaywall_email` for Unpaywall polite-pool access and `ncbi_email` for NCBI rate-limit compliance.
+All fields are optional with sensible defaults. The resolver chain currently tries Unpaywall, then Semantic Scholar, then PMC OA, and finally appends any enabled institutional location. Set `unpaywall_email` for Unpaywall polite-pool access and `ncbi_email` for NCBI rate-limit compliance.
 
 **LibProxy configuration:**
 
@@ -444,6 +498,8 @@ Some papers resolve to URLs that need an authenticated browser session, such as 
 3. If the bridge is available, it sends a `POST /bridge/download` request with the DOI, candidate URL, and session name. The bridge server handles navigation and PDF download inside the named browser session.
 4. If the bridge is unavailable or `session_name` is omitted, acquisition falls back to the standard HTTP download path. Nothing breaks; you just won't get paywalled PDFs.
 
+For LibProxy, `acquire_paper` has one extra source-backed behavior: if the DOI resolved to a LibProxy URL and you provided `session_name`, it first tries direct browser navigation to `https://doi.org/{doi}` through the browser session. If that still lands on an explicit paywall, it retries through the proxied institutional URL.
+
 **Usage example:**
 
 ```python
@@ -459,6 +515,16 @@ The session name is a logical label for a named browser profile managed by the d
 **Provenance:** When a download goes through the bridge, the result includes `provenance.bridge_session` set to the session name and `provenance.access_source` set to `"institutional"`. Standard HTTP downloads record only `access_source`.
 
 **What the bridge does not do:** It does not automate SAML or Shibboleth login flows. The browser session must already be authenticated before you call `acquire_paper`. The bridge only navigates to the resolved URL and downloads the PDF.
+
+### Translation-server is a separate service
+
+`zotero-mcp` can talk to Zotero translation-server through `src/zotero_mcp/translation_server_client.py`, but translation-server is not the Zotero desktop binary and is not embedded in this repo.
+
+- default endpoint: `http://127.0.0.1:1969`
+- override: `ZOTERO_TRANSLATION_SERVER_URL`
+- MCP tools: `translation_server_status`, `translate_with_translation_server`
+
+When the input to `resolve_paper_access` is a URL, the resolver first checks whether translation-server is reachable. If it is, the first translated item can contribute metadata and PDF attachment URLs before the fallback URL-translation path runs.
 
 **Bridge endpoint reference:**
 
@@ -534,8 +600,6 @@ uv sync --extra ocr
 | `extraction.ocr_model` | `"qwen/qwen3-vl-32b-instruct"` | OpenRouter model for OCR |
 | `extraction.openrouter_api_key` | `""` | Required when `ocr_fallback` is true |
 | `extraction.ocr_page_limit` | `50` | Max pages to process with OCR |
-
-Note: `s2_enabled`, `pmc_enabled`, `auto_ingest`, and `ncbi_email` are dataclass defaults. Config-file loading for these fields is planned but not yet wired; set them in code or environment for now.
 
 **Run the MCP server from the checkout:**
 

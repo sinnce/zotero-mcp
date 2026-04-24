@@ -179,12 +179,44 @@ For HTTP/SSE-based clients:
 zotero-mcp serve --transport sse --host localhost --port 8000
 ```
 
+## Optional Services in the Paper Acquisition Workflow
+
+The core MCP server can run by itself for Zotero search, metadata, fulltext, notes, annotations, and basic write operations. Two optional services extend acquisition behavior when you need URL translation or session-gated PDF downloads.
+
+### Zotero translation-server
+
+Zotero translation-server is a separate Node.js HTTP service from the Zotero project. It is not the Zotero desktop binary and is not started by `zotero-mcp`.
+
+`zotero-mcp` uses it only as a client:
+
+- default URL: `http://127.0.0.1:1969`
+- override: `ZOTERO_TRANSLATION_SERVER_URL`
+- check tool: `translation_server_status`
+- translate tool: `translate_with_translation_server`
+
+When `resolve_paper_access` receives a URL, the resolver first checks whether translation-server is reachable. If available, translated Zotero metadata and PDF attachments can seed the acquisition result before the fallback URL translator path runs.
+
+### Browser bridge for institutional PDFs
+
+Institutional access is decided by `zotero-mcp`, but browser automation is delegated to the bridge server in `packages/opencode-deep-research`.
+
+The source-level flow is:
+
+1. `resolve_paper_access` normalizes the input and resolves public locations through Unpaywall, Semantic Scholar, PMC OA, arXiv, URL translators, and optional institutional access.
+2. Institutional LibProxy locations are marked with `requires_session=true` and `session_kind="libproxy"`.
+3. `acquire_paper(identifier, session_name="libproxy-snu")` checks `http://127.0.0.1:9870/bridge/health`.
+4. If the bridge is available, it sends `POST /bridge/download` with `doi`, `candidate_url`, and `session_name`.
+5. If the bridge succeeds, the returned provenance includes `bridge_session`; otherwise `acquire_paper` falls back to the standard HTTP download path.
+
+The bridge does not automate campus login. Start and authenticate the named Pinchtab browser session before calling `acquire_paper` with `session_name`.
+
 
 ## Available Tools
 
 When connected to Claude Desktop or another MCP client, you'll have access to these tools:
 
 - **zotero_search_items**: Search your library by title, creator, or content
+- **zotero_semantic_search**: Search your library by embedding similarity when semantic search is configured
 - **zotero_get_item_metadata**: Get detailed information about a specific item
 - **zotero_get_item_fulltext**: Get the full text content of an item
 - **zotero_get_collections**: List all collections in your library
@@ -192,6 +224,9 @@ When connected to Claude Desktop or another MCP client, you'll have access to th
 - **zotero_get_item_children**: Get child items (attachments, notes) for a specific item
 - **zotero_get_tags**: Get all tags used in your library
 - **zotero_get_recent**: Get recently added items to your library
+- **resolve_paper_access**: Resolve DOI, arXiv ID, or URL inputs to candidate access locations
+- **acquire_paper**: Resolve, download, and optionally ingest a paper, with optional browser-bridge routing via `session_name`
+- **translation_server_status**: Check whether the optional Zotero translation-server helper is reachable
 
 ## Example Queries
 
