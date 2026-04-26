@@ -1,16 +1,12 @@
 """Tests for acquisition config extension."""
 
 import json
+
 import pytest
-import tempfile
-from pathlib import Path
+
 from zotero_mcp.acquisition.config import (
     AcquisitionConfig,
-    InstitutionalConfig,
-    ExtractionConfig,
-    DownloadConfig,
     load_acquisition_config,
-    ConfigError,
 )
 
 
@@ -40,7 +36,14 @@ def config_with_full_acquisition(tmp_path):
                 "ezproxy_prefix": "proxy.university.edu",
                 "openurl_base": "https://link.library.edu/openurl",
             },
-            "extraction": {"default_backend": "markitdown", "ocr_fallback": True},
+            "extraction": {
+                "default_backend": "markitdown",
+                "ocr_fallback": True,
+                "docling_ocr_fallback": True,
+                "docling_ocr_model": "qwen/test-vl",
+                "docling_ocr_api_key": "docling-key",
+                "docling_ocr_page_limit": 3,
+            },
             "download": {"timeout_seconds": 60, "max_size_mb": 200},
         },
     }
@@ -60,6 +63,10 @@ class TestNoAcquisitionSection:
         assert cfg.institutional_access.enabled is False
         assert cfg.extraction.default_backend == "pdfminer"
         assert cfg.extraction.ocr_fallback is False
+        assert cfg.extraction.docling_ocr_fallback is False
+        assert cfg.extraction.docling_ocr_preset == "qwen"
+        assert cfg.extraction.docling_ocr_model == "qwen/qwen3-vl-32b-instruct"
+        assert cfg.extraction.docling_ocr_min_chars == 500
         assert cfg.download.timeout_seconds == 30
         assert cfg.download.max_size_mb == 100
         assert cfg.s2_enabled is True
@@ -91,6 +98,10 @@ class TestFullAcquisitionConfig:
         cfg = load_acquisition_config(config_with_full_acquisition)
         assert cfg.extraction.default_backend == "markitdown"
         assert cfg.extraction.ocr_fallback is True
+        assert cfg.extraction.docling_ocr_fallback is True
+        assert cfg.extraction.docling_ocr_model == "qwen/test-vl"
+        assert cfg.extraction.docling_ocr_api_key == "docling-key"
+        assert cfg.extraction.docling_ocr_page_limit == 3
 
     def test_download_config(self, config_with_full_acquisition):
         cfg = load_acquisition_config(config_with_full_acquisition)

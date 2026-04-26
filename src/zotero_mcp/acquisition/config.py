@@ -27,6 +27,14 @@ class ExtractionConfig:
     ocr_model: str = "qwen/qwen3-vl-32b-instruct"
     openrouter_api_key: str = ""
     ocr_page_limit: int = 50
+    docling_ocr_fallback: bool = False
+    docling_ocr_preset: str = "qwen"
+    docling_ocr_model: str = "qwen/qwen3-vl-32b-instruct"
+    docling_ocr_base_url: str = "https://openrouter.ai/api/v1/chat/completions"
+    docling_ocr_api_key: str = ""
+    docling_ocr_page_limit: int = 50
+    docling_ocr_min_chars: int = 500
+    docling_ocr_timeout: int = 120
 
 
 @dataclass
@@ -83,6 +91,14 @@ def load_acquisition_config(config_path: Path | str | None = None) -> Acquisitio
         ocr_model=str(ext_raw.get("ocr_model", "qwen/qwen3-vl-32b-instruct")),
         openrouter_api_key=str(ext_raw.get("openrouter_api_key", "")),
         ocr_page_limit=int(ext_raw.get("ocr_page_limit", 50)),
+        docling_ocr_fallback=bool(ext_raw.get("docling_ocr_fallback", False)),
+        docling_ocr_preset=str(ext_raw.get("docling_ocr_preset", "qwen")),
+        docling_ocr_model=str(ext_raw.get("docling_ocr_model", "qwen/qwen3-vl-32b-instruct")),
+        docling_ocr_base_url=str(ext_raw.get("docling_ocr_base_url", "https://openrouter.ai/api/v1/chat/completions")),
+        docling_ocr_api_key=str(ext_raw.get("docling_ocr_api_key", "")),
+        docling_ocr_page_limit=int(ext_raw.get("docling_ocr_page_limit", 50)),
+        docling_ocr_min_chars=int(ext_raw.get("docling_ocr_min_chars", 500)),
+        docling_ocr_timeout=int(ext_raw.get("docling_ocr_timeout", 120)),
     )
 
     dl_raw = acq.get("download", {})

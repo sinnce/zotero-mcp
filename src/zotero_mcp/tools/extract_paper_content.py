@@ -1,20 +1,27 @@
 """extract_paper_content MCP tool — thin wrapper around extraction registry."""
 
 from __future__ import annotations
+
 from pathlib import Path
-from zotero_mcp._app import mcp
+
 from fastmcp import Context
+
+from zotero_mcp._app import mcp
 
 
 def _build_registry():
+    from zotero_mcp.acquisition.config import load_acquisition_config
     from zotero_mcp.extraction.base import ExtractorRegistry
-    from zotero_mcp.extraction.pdfminer_ext import PdfminerExtractor
+    from zotero_mcp.extraction.docling_vlm_ext import DoclingVLMExtractor
     from zotero_mcp.extraction.markitdown_ext import MarkItDownExtractor
+    from zotero_mcp.extraction.pdfminer_ext import PdfminerExtractor
 
+    config = load_acquisition_config()
     registry = ExtractorRegistry()
     registry.register(PdfminerExtractor())
+    registry.register(DoclingVLMExtractor(config=config))
     registry.register(MarkItDownExtractor())
-    return registry
+    return registry, config
 
 
 @mcp.tool()
@@ -31,17 +38,19 @@ def extract_paper_content(
     if not path.exists():
         return f"Error: File not found: {file_path}"
 
-    registry = _build_registry()
+    registry, config = _build_registry()
 
     try:
         content = path.read_bytes()
     except Exception as e:
         return f"Error reading file: {e}"
 
-    from zotero_mcp.extraction.base import NoExtractorError
-
     try:
-        result = registry.extract_with_fallback(content, content_type, {})
+        result = registry.extract_with_fallback(
+            content,
+            content_type,
+            {"docling_ocr_min_chars": config.extraction.docling_ocr_min_chars},
+        )
     except Exception as e:
         return f"Error during extraction: {e}"
 

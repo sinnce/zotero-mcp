@@ -47,6 +47,10 @@ scite = [
 ocr = [
     "marker-pdf>=1.0",
 ]
+docling-ocr = [
+    "docling>=2.91.0",
+    "pymupdf>=1.24.0",
+]
 all = [
     "zotero-mcp-server[semantic,pdf,scite]",
 ]

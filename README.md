@@ -99,6 +99,7 @@ Heavy ML/PDF dependencies are separated into optional extras so the base install
 |-------|-------------|-----------------|
 | `semantic` | Semantic search via ChromaDB, sentence-transformers, OpenAI/Gemini embeddings | `pip install "zotero-mcp-server[semantic]"` |
 | `pdf` | PDF outline extraction (PyMuPDF) and EPUB annotation support | `pip install "zotero-mcp-server[pdf]"` |
+| `docling-ocr` | Docling VLM OCR fallback for scanned/math-heavy academic PDFs via OpenAI-compatible vision APIs, with PyMuPDF PDF normalization | `pip install "zotero-mcp-server[docling-ocr]"` |
 | `scite` | [Scite](https://scite.ai) citation intelligence — tallies and retraction alerts (no account needed) | `pip install "zotero-mcp-server[scite]"` |
 | `all` | Everything above | `pip install "zotero-mcp-server[all]"` |
 
@@ -106,6 +107,26 @@ For example, with uv:
 ```bash
 uv tool install "zotero-mcp-server[all]"    # Full install with all features
 uv tool install "zotero-mcp-server[semantic]" # Just semantic search
+uv tool install "zotero-mcp-server[docling-ocr]" # Docling VLM OCR fallback
+```
+
+To enable Docling OCR fallback for `extract_paper_content`, set `OPENROUTER_API_KEY` or `OPENAI_API_KEY` and add:
+
+```json
+{
+  "acquisition": {
+    "extraction": {
+      "default_backend": "pdfminer",
+      "docling_ocr_fallback": true,
+      "docling_ocr_preset": "qwen",
+      "docling_ocr_model": "qwen/qwen3-vl-32b-instruct",
+      "docling_ocr_base_url": "https://openrouter.ai/api/v1/chat/completions",
+      "docling_ocr_page_limit": 50,
+      "docling_ocr_min_chars": 500,
+      "docling_ocr_timeout": 120
+    }
+  }
+}
 ```
 
 If you only need basic library access (search, read, annotate, write), the default install with no extras is all you need.

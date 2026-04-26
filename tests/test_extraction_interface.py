@@ -1,7 +1,8 @@
 """Tests for the extraction adapter interface and registry."""
 
 import pytest
-from zotero_mcp.extraction.base import Extractor, ExtractorRegistry, NoExtractorError, ExtractionResult
+
+from zotero_mcp.extraction.base import ExtractionResult, Extractor, ExtractorRegistry, NoExtractorError
 
 
 class MockPdfExtractor(Extractor):
@@ -15,6 +16,20 @@ class MockPdfExtractor(Extractor):
     def extract(self, content: bytes, content_type: str, metadata: dict) -> "ExtractionResult":
         text = content.decode("utf-8", errors="ignore")
         return ExtractionResult(text=text, backend=self.name)
+
+
+class MockDoclingExtractor(Extractor):
+    name = "docling-vlm"
+
+    def __init__(self):
+        self.called = False
+
+    def supports(self, content_type: str) -> bool:
+        return content_type == "application/pdf"
+
+    def extract(self, content: bytes, content_type: str, metadata: dict) -> "ExtractionResult":
+        self.called = True
+        return ExtractionResult(text="Docling OCR extracted text " * 30, backend=self.name)
 
 
 class MockFailingPdfExtractor(Extractor):
@@ -102,6 +117,39 @@ class TestExtractorRegistry:
         assert result.quality_signal == "empty"
         # The HTML extractor must NOT have been used
         assert result.backend != "mock_html"
+
+    def test_empty_pdf_result_falls_through_to_ocr(self):
+        reg = ExtractorRegistry()
+        ocr = MockDoclingExtractor()
+        reg.register(MockPdfExtractor())
+        reg.register(ocr)
+
+        result = reg.extract_with_fallback(b"", "application/pdf", {})
+
+        assert result.backend == "docling-vlm"
+        assert ocr.called is True
+        assert result.fallback_chain == ["mock_pdf: empty", "docling-vlm: success"]
+
+    def test_good_pdf_result_does_not_call_ocr(self):
+        reg = ExtractorRegistry()
+        ocr = MockDoclingExtractor()
+        reg.register(MockPdfExtractor())
+        reg.register(ocr)
+
+        result = reg.extract_with_fallback(b"PDF content " * 50, "application/pdf", {})
+
+        assert result.backend == "mock_pdf"
+        assert ocr.called is False
+
+    def test_short_pdf_result_falls_through_when_min_chars_configured(self):
+        reg = ExtractorRegistry()
+        reg.register(MockPdfExtractor())
+        reg.register(MockDoclingExtractor())
+
+        result = reg.extract_with_fallback(b"too short", "application/pdf", {"docling_ocr_min_chars": 500})
+
+        assert result.backend == "docling-vlm"
+        assert result.fallback_chain[0] == "mock_pdf: degraded"
 
 
 class TestQualitySignal:

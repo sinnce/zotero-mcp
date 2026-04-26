@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -87,9 +88,12 @@ class ExtractorRegistry:
             )
 
         fallback_chain: list[str] = []
-        for extractor in candidates:
+        for index, extractor in enumerate(candidates):
             try:
                 result = extractor.extract(content, content_type, metadata)
+                if self._should_try_next_extractor(result, content_type, metadata, candidates[index + 1 :]):
+                    fallback_chain.append(f"{extractor.name}: {result.quality_signal}")
+                    continue
                 if fallback_chain:
                     result.fallback_chain = fallback_chain + [f"{extractor.name}: success"]
                 return result
@@ -103,3 +107,18 @@ class ExtractorRegistry:
             backend="none",
             fallback_chain=fallback_chain,
         )
+
+    @staticmethod
+    def _should_try_next_extractor(
+        result: ExtractionResult,
+        content_type: str,
+        metadata: dict,
+        remaining: list[Extractor],
+    ) -> bool:
+        if content_type != "application/pdf" or not remaining:
+            return False
+        if result.quality_signal == "empty":
+            return True
+        min_chars = int(metadata.get("docling_ocr_min_chars") or 0)
+        has_ocr_candidate = any(e.name in {"docling-vlm", "marker-vlm"} for e in remaining)
+        return bool(min_chars and has_ocr_candidate and result.char_count < min_chars)
