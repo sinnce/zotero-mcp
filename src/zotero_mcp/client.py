@@ -22,6 +22,17 @@ load_dotenv()
 _active_library_override: dict[str, str] = {}
 
 
+def _get_local_api_port() -> str:
+    return os.getenv("ZOTERO_LOCAL_PORT", "23119")
+
+
+def _apply_local_endpoint_override(client: zotero.Zotero) -> zotero.Zotero:
+    if getattr(client, "local", False):
+        port = _get_local_api_port()
+        client.endpoint = f"http://localhost:{port}/api"
+    return client
+
+
 def set_active_library(library_id: str, library_type: str) -> None:
     """Set runtime library override for all subsequent get_zotero_client() calls."""
     _active_library_override["library_id"] = library_id
@@ -79,12 +90,13 @@ def get_zotero_client() -> zotero.Zotero:
             "or use ZOTERO_LOCAL=true for local Zotero instance."
         )
 
-    return zotero.Zotero(
+    client = zotero.Zotero(
         library_id=library_id,
         library_type=library_type,
         api_key=api_key,
         local=local,
     )
+    return _apply_local_endpoint_override(client)
 
 
 def get_local_zotero_client() -> zotero.Zotero | None:
@@ -106,6 +118,7 @@ def get_local_zotero_client() -> zotero.Zotero | None:
             api_key=None,
             local=True,
         )
+        _apply_local_endpoint_override(client)
         # Test connection by making a simple request
         client.items(limit=1)
         return client
@@ -207,7 +220,7 @@ def format_item_metadata(item: dict[str, Any], include_abstract: bool = True) ->
                 key_part = line.split(":", 1)[1].strip() if ":" in line else line.strip()
                 lines.append(f"**Citation Key (from Extra):** {key_part}")
                 break
-    
+
     # Tags
     if tags := data.get("tags"):
         tag_list = [f"`{tag['tag']}`" for tag in tags]
@@ -246,6 +259,7 @@ def generate_bibtex(item: dict[str, Any]) -> str:
     # Try Better BibTeX first
     try:
         from zotero_mcp.better_bibtex_client import ZoteroBetterBibTexAPI
+
         bibtex = ZoteroBetterBibTexAPI()
 
         if bibtex.is_zotero_running():
@@ -270,7 +284,7 @@ def generate_bibtex(item: dict[str, Any]) -> str:
         "thesis": "phdthesis",
         "report": "techreport",
         "webpage": "misc",
-        "manuscript": "unpublished"
+        "manuscript": "unpublished",
     }
 
     # Create citation key
@@ -297,14 +311,14 @@ def generate_bibtex(item: dict[str, Any]) -> str:
         ("publisher", "publisher"),
         ("DOI", "doi"),
         ("url", "url"),
-        ("abstractNote", "abstract")
+        ("abstractNote", "abstract"),
     ]
 
     for zotero_field, bibtex_field in field_mappings:
         if value := data.get(zotero_field):
             # Escape special characters
             value = value.replace("{", "\\{").replace("}", "\\}")
-            lines.append(f'  {bibtex_field} = {{{value}}},')
+            lines.append(f"  {bibtex_field} = {{{value}}},")
 
     # Add authors
     if creators:
@@ -316,23 +330,21 @@ def generate_bibtex(item: dict[str, Any]) -> str:
                 elif "name" in creator:
                     authors.append(creator["name"])
         if authors:
-            lines.append(f'  author = {{{" and ".join(authors)}}},')
+            lines.append(f"  author = {{{' and '.join(authors)}}},")
 
     # Add year
     if year != "nodate":
-        lines.append(f'  year = {{{year}}},')
+        lines.append(f"  year = {{{year}}},")
 
     # Remove trailing comma from last field and close entry
-    if lines[-1].endswith(','):
+    if lines[-1].endswith(","):
         lines[-1] = lines[-1][:-1]
     lines.append("}")
 
     return "\n".join(lines)
 
 
-def get_attachment_details(
-    zot: zotero.Zotero, item: dict[str, Any]
-) -> AttachmentDetails | None:
+def get_attachment_details(zot: zotero.Zotero, item: dict[str, Any]) -> AttachmentDetails | None:
     """
     Get attachment details for a Zotero item, finding the most relevant attachment.
 
