@@ -5,10 +5,10 @@ import logging
 import os
 import sys
 from contextlib import asynccontextmanager, suppress
-from pathlib import Path
 
 from fastmcp import FastMCP
 
+from zotero_mcp.config_paths import get_config_path
 from zotero_mcp.utils import is_local_mode
 
 # Configure logging from environment variable
@@ -31,7 +31,7 @@ async def server_lifespan(server: FastMCP):
     try:
         from zotero_mcp.semantic_search import create_semantic_search
 
-        config_path = Path.home() / ".config" / "zotero-mcp" / "config.json"
+        config_path = get_config_path()
 
         if config_path.exists():
             search = create_semantic_search(str(config_path))
@@ -41,10 +41,10 @@ async def server_lifespan(server: FastMCP):
 
                 async def background_update():
                     try:
-                        stats = await asyncio.to_thread(
-                            search.update_database, extract_fulltext=is_local_mode()
+                        stats = await asyncio.to_thread(search.update_database, extract_fulltext=is_local_mode())
+                        sys.stderr.write(
+                            f"Database update completed: {stats.get('processed_items', 0)} items processed\n"
                         )
-                        sys.stderr.write(f"Database update completed: {stats.get('processed_items', 0)} items processed\n")
                     except Exception as e:
                         sys.stderr.write(f"Background database update failed: {e}\n")
 

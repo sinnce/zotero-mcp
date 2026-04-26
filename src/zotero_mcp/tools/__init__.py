@@ -16,9 +16,10 @@ except ImportError:
 
 # Paper acquisition tools (PKB-1)
 from zotero_mcp.tools import (  # noqa: F401
-    resolve_paper_access,
+    acquire_paper,
     download_paper_artifact,
     extract_paper_content,
     ingest_paper_to_zotero,
-    acquire_paper,
+    resolve_paper_access,
+    translation_server,
 )

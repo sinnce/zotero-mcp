@@ -1,31 +1,27 @@
 """Retrieval tool functions — read-only access to Zotero items, collections, tags, libraries, and feeds."""
 
-from typing import Literal
 import json
 import logging as _logging
 import os
 import tempfile
 import time as _time
-from pathlib import Path
+from typing import Literal
 
 from fastmcp import Context
 
-from zotero_mcp._app import mcp
 from zotero_mcp import client as _client
 from zotero_mcp import utils as _utils
+from zotero_mcp._app import mcp
+from zotero_mcp.config_paths import get_config_path
 from zotero_mcp.tools import _helpers
 
 
 @mcp.tool(
     name="zotero_get_item_metadata",
-    description="Get detailed metadata for a specific Zotero item by its key. If the metadata and abstract don't contain the specific information you need, use zotero_get_item_fulltext to read the full paper — but note that fulltext retrieval is resource-intensive and should not be used for searching; use zotero_search_items or zotero_semantic_search instead."
+    description="Get detailed metadata for a specific Zotero item by its key. If the metadata and abstract don't contain the specific information you need, use zotero_get_item_fulltext to read the full paper — but note that fulltext retrieval is resource-intensive and should not be used for searching; use zotero_search_items or zotero_semantic_search instead.",
 )
 def get_item_metadata(
-    item_key: str,
-    include_abstract: bool = True,
-    format: Literal["markdown", "bibtex"] = "markdown",
-    *,
-    ctx: Context
+    item_key: str, include_abstract: bool = True, format: Literal["markdown", "bibtex"] = "markdown", *, ctx: Context
 ) -> str:
     """
     Get detailed metadata for a Zotero item.
@@ -62,13 +58,9 @@ def get_item_metadata(
 
 @mcp.tool(
     name="zotero_get_item_fulltext",
-    description="Get the full text content of a Zotero item by its key. WARNING: Returns the entire paper text (often 10K+ tokens). Only use when you need to read the actual paper content, not just metadata. Do NOT use this for searching — use zotero_search_items or zotero_semantic_search instead. Avoid calling this on multiple papers in one conversation unless the user specifically asks to read them."
+    description="Get the full text content of a Zotero item by its key. WARNING: Returns the entire paper text (often 10K+ tokens). Only use when you need to read the actual paper content, not just metadata. Do NOT use this for searching — use zotero_search_items or zotero_semantic_search instead. Avoid calling this on multiple papers in one conversation unless the user specifically asks to read them.",
 )
-def get_item_fulltext(
-    item_key: str,
-    *,
-    ctx: Context
-) -> str:
+def get_item_fulltext(item_key: str, *, ctx: Context) -> str:
     """
     Get the full text content of a Zotero item.
 
@@ -99,7 +91,7 @@ def get_item_fulltext(
             from zotero_mcp.local_db import LocalZoteroReader
 
             if _utils.is_local_mode():
-                config_path = Path.home() / ".config" / "zotero-mcp" / "config.json"
+                config_path = get_config_path()
                 zotero_db_path = None
                 pdf_max_pages = None
                 fulltext_display_max = None
@@ -114,9 +106,7 @@ def get_item_fulltext(
                             pdf_max_pages = extraction_cfg.get("pdf_max_pages")
                             # Separate display limit for when Claude reads papers
                             # (reduces token usage vs. indexing which can be higher)
-                            fulltext_display_max = extraction_cfg.get(
-                                "fulltext_display_max_pages"
-                            )
+                            fulltext_display_max = extraction_cfg.get("fulltext_display_max_pages")
                     except Exception:
                         pass
 
@@ -141,7 +131,7 @@ def get_item_fulltext(
                                 ctx.info(f"Retrieved full text from local storage ({source})")
                                 return _helpers._prepend_size_warning(
                                     f"{metadata}\n\n---\n\n## Full Text\n\n{extracted[0]}",
-                                    "Consider using zotero_semantic_search to find specific content instead of reading full papers."
+                                    "Consider using zotero_semantic_search to find specific content instead of reading full papers.",
                                 )
         except Exception as local_extract_error:
             local_extract_error_msg = str(local_extract_error)
@@ -161,7 +151,7 @@ def get_item_fulltext(
                 ctx.info("Successfully retrieved full text from Zotero's index")
                 return _helpers._prepend_size_warning(
                     f"{metadata}\n\n---\n\n## Full Text\n\n{full_text_data['content']}",
-                    "Consider using zotero_semantic_search to find specific content instead of reading full papers."
+                    "Consider using zotero_semantic_search to find specific content instead of reading full papers.",
                 )
         except Exception as fulltext_error:
             ctx.info(f"Couldn't retrieve indexed full text: {str(fulltext_error)}")
@@ -181,7 +171,7 @@ def get_item_fulltext(
                     converted_text = _client.convert_to_markdown(file_path)
                     return _helpers._prepend_size_warning(
                         f"{metadata}\n\n---\n\n## Full Text\n\n{converted_text}",
-                        "Consider using zotero_semantic_search to find specific content instead of reading full papers."
+                        "Consider using zotero_semantic_search to find specific content instead of reading full papers.",
                     )
                 else:
                     return f"{metadata}\n\n---\n\nFile download failed."
@@ -199,15 +189,8 @@ def get_item_fulltext(
         return f"Error fetching item full text: {str(e)}"
 
 
-@mcp.tool(
-    name="zotero_get_collections",
-    description="List all collections in your Zotero library."
-)
-def get_collections(
-    limit: int | str | None = None,
-    *,
-    ctx: Context
-) -> str:
+@mcp.tool(name="zotero_get_collections", description="List all collections in your Zotero library.")
+def get_collections(limit: int | str | None = None, *, ctx: Context) -> str:
     """
     List all collections in your Zotero library.
 
@@ -308,14 +291,14 @@ def _build_attachment_extra(info):
 
 @mcp.tool(
     name="zotero_get_collection_items",
-    description="Get all items in a specific Zotero collection. Supports detail='keys_only' (minimal), 'summary' (default, no abstracts), or 'full' (with abstracts). Includes PDF/notes indicators. TIP: To find papers on a specific topic, use zotero_semantic_search instead — it's faster and returns only relevant results."
+    description="Get all items in a specific Zotero collection. Supports detail='keys_only' (minimal), 'summary' (default, no abstracts), or 'full' (with abstracts). Includes PDF/notes indicators. TIP: To find papers on a specific topic, use zotero_semantic_search instead — it's faster and returns only relevant results.",
 )
 def get_collection_items(
     collection_key: str,
     detail: Literal["keys_only", "summary", "full"] = "summary",
     limit: int | str | None = 50,
     *,
-    ctx: Context
+    ctx: Context,
 ) -> str:
     """
     Get all items in a specific Zotero collection.
@@ -355,9 +338,7 @@ def get_collection_items(
             if not parent_key:
                 continue
             if parent_key not in attachment_info:
-                attachment_info[parent_key] = {
-                    "has_pdf": False, "attachment_count": 0, "has_notes": False
-                }
+                attachment_info[parent_key] = {"has_pdf": False, "attachment_count": 0, "has_notes": False}
             if item_type == "attachment":
                 attachment_info[parent_key]["attachment_count"] += 1
                 if data.get("contentType", "") == "application/pdf":
@@ -367,10 +348,7 @@ def get_collection_items(
 
         # Filter to parent items only (exclude attachments, notes, annotations)
         child_types = {"attachment", "note", "annotation"}
-        parent_items = [
-            item for item in all_items
-            if item.get("data", {}).get("itemType", "") not in child_types
-        ]
+        parent_items = [item for item in all_items if item.get("data", {}).get("itemType", "") not in child_types]
 
         if not parent_items:
             return f"No items found in collection: {collection_name} (Key: {collection_key})"
@@ -404,27 +382,24 @@ def get_collection_items(
 
             elif detail == "full":
                 extra = _build_attachment_extra(info)
-                output.extend(_utils.format_item_result(
-                    item, index=i, abstract_len=None, include_tags=True,
-                    extra_fields=extra
-                ))
+                output.extend(
+                    _utils.format_item_result(item, index=i, abstract_len=None, include_tags=True, extra_fields=extra)
+                )
 
             else:  # "summary" (default)
                 extra = _build_attachment_extra(info)
-                output.extend(_utils.format_item_result(
-                    item, index=i, abstract_len=0, include_tags=True,
-                    extra_fields=extra
-                ))
+                output.extend(
+                    _utils.format_item_result(item, index=i, abstract_len=0, include_tags=True, extra_fields=extra)
+                )
 
         if truncated:
-            output.append(f"\n*Showing {limit} of {len(parent_items)} items. Increase the limit parameter to see more.*")
+            output.append(
+                f"\n*Showing {limit} of {len(parent_items)} items. Increase the limit parameter to see more.*"
+            )
 
         result = "\n".join(output)
         if detail == "full":
-            result = _helpers._prepend_size_warning(
-                result,
-                'Use detail="summary" for a lighter response.'
-            )
+            result = _helpers._prepend_size_warning(result, 'Use detail="summary" for a lighter response.')
         return result
 
     except Exception as e:
@@ -433,14 +408,9 @@ def get_collection_items(
 
 
 @mcp.tool(
-    name="zotero_get_item_children",
-    description="Get all child items (attachments, notes) for a specific Zotero item."
+    name="zotero_get_item_children", description="Get all child items (attachments, notes) for a specific Zotero item."
 )
-def get_item_children(
-    item_key: str,
-    *,
-    ctx: Context
-) -> str:
+def get_item_children(item_key: str, *, ctx: Context) -> str:
     """
     Get all child items (attachments, notes) for a specific Zotero item.
 
@@ -548,13 +518,9 @@ def get_item_children(
 
 @mcp.tool(
     name="zotero_get_items_children",
-    description="Get child items (attachments, notes) for MULTIPLE Zotero items in one call. Much more efficient than calling get_item_children repeatedly."
+    description="Get child items (attachments, notes) for MULTIPLE Zotero items in one call. Much more efficient than calling get_item_children repeatedly.",
 )
-def get_items_children(
-    item_keys: list[str] | str,
-    *,
-    ctx: Context
-) -> str:
+def get_items_children(item_keys: list[str] | str, *, ctx: Context) -> str:
     """
     Get child items for multiple Zotero items in a single call.
 
@@ -572,7 +538,7 @@ def get_items_children(
         # Batch-resolve parent titles (50 per API call)
         parent_titles = {}
         for batch_start in range(0, len(keys), 50):
-            batch = keys[batch_start:batch_start + 50]
+            batch = keys[batch_start : batch_start + 50]
             try:
                 items = zot.items(itemKey=",".join(batch))
                 for item in items:
@@ -635,15 +601,8 @@ def get_items_children(
         return f"Error fetching items children: {str(e)}"
 
 
-@mcp.tool(
-    name="zotero_get_tags",
-    description="Get all tags used in your Zotero library."
-)
-def get_tags(
-    limit: int | str | None = None,
-    *,
-    ctx: Context
-) -> str:
+@mcp.tool(name="zotero_get_tags", description="Get all tags used in your Zotero library.")
+def get_tags(limit: int | str | None = None, *, ctx: Context) -> str:
     """
     Get all tags used in your Zotero library.
 
@@ -722,10 +681,7 @@ def list_libraries(*, ctx: Context) -> str:
 
         # Show active library context
         if override:
-            output.append(
-                f"> **Active library:** ID={override['library_id']}, "
-                f"type={override['library_type']}"
-            )
+            output.append(f"> **Active library:** ID={override['library_id']}, type={override['library_type']}")
             output.append("")
 
         if local:
@@ -736,36 +692,31 @@ def list_libraries(*, ctx: Context) -> str:
                 libraries = reader.get_libraries()
 
                 # User library
-                user_libs = [l for l in libraries if l["type"] == "user"]
+                user_libs = [library for library in libraries if library["type"] == "user"]
                 if user_libs:
                     output.append("## User Library")
                     for lib in user_libs:
-                        output.append(
-                            f"- **My Library** — {lib['itemCount']} items "
-                            f"(libraryID={lib['libraryID']})"
-                        )
+                        output.append(f"- **My Library** — {lib['itemCount']} items (libraryID={lib['libraryID']})")
                     output.append("")
 
                 # Group libraries
-                group_libs = [l for l in libraries if l["type"] == "group"]
+                group_libs = [library for library in libraries if library["type"] == "group"]
                 if group_libs:
                     output.append("## Group Libraries")
                     for lib in group_libs:
                         desc = f" — {lib['groupDescription']}" if lib.get("groupDescription") else ""
                         output.append(
-                            f"- **{lib['groupName']}** — {lib['itemCount']} items "
-                            f"(groupID={lib['groupID']}){desc}"
+                            f"- **{lib['groupName']}** — {lib['itemCount']} items (groupID={lib['groupID']}){desc}"
                         )
                     output.append("")
 
                 # Feeds
-                feed_libs = [l for l in libraries if l["type"] == "feed"]
+                feed_libs = [library for library in libraries if library["type"] == "feed"]
                 if feed_libs:
                     output.append("## RSS Feeds")
                     for lib in feed_libs:
                         output.append(
-                            f"- **{lib['feedName']}** — {lib['itemCount']} items "
-                            f"(libraryID={lib['libraryID']})"
+                            f"- **{lib['feedName']}** — {lib['itemCount']} items (libraryID={lib['libraryID']})"
                         )
                     output.append("")
             finally:
@@ -774,9 +725,7 @@ def list_libraries(*, ctx: Context) -> str:
             # Web mode: query groups via pyzotero
             zot = _client.get_zotero_client()
             output.append("## User Library")
-            output.append(
-                f"- **My Library** (libraryID={os.getenv('ZOTERO_LIBRARY_ID', '?')})"
-            )
+            output.append(f"- **My Library** (libraryID={os.getenv('ZOTERO_LIBRARY_ID', '?')})")
             output.append("")
 
             try:
@@ -785,10 +734,7 @@ def list_libraries(*, ctx: Context) -> str:
                     output.append("## Group Libraries")
                     for group in groups:
                         gdata = group.get("data", {})
-                        output.append(
-                            f"- **{gdata.get('name', 'Unknown')}** "
-                            f"(groupID={group.get('id', '?')})"
-                        )
+                        output.append(f"- **{gdata.get('name', 'Unknown')}** (groupID={group.get('id', '?')})")
                     output.append("")
             except Exception:
                 output.append("*Could not retrieve group libraries.*\n")
@@ -796,9 +742,7 @@ def list_libraries(*, ctx: Context) -> str:
             output.append("*Note: RSS feeds are only accessible in local mode.*")
 
         output.append("")
-        output.append(
-            "Use `zotero_switch_library` to switch to a different library."
-        )
+        output.append("Use `zotero_switch_library` to switch to a different library.")
 
         return "\n".join(output)
 
@@ -861,8 +805,7 @@ def switch_library(
             # Roll back on failure
             _client.clear_active_library()
             return (
-                f"Error: Could not access library {library_id} "
-                f"(type={library_type}): {e}. Reverted to default library."
+                f"Error: Could not access library {library_id} (type={library_type}): {e}. Reverted to default library."
             )
 
     except Exception as e:
@@ -889,14 +832,11 @@ def validate_library_switch(library_id: str, library_type: str) -> str | None:
             try:
                 libraries = reader.get_libraries()
                 if library_type == "group":
-                    valid_ids = {str(l["groupID"]) for l in libraries if l["type"] == "group"}
+                    valid_ids = {str(library["groupID"]) for library in libraries if library["type"] == "group"}
                     if library_id not in valid_ids:
-                        return (
-                            f"Group '{library_id}' not found. "
-                            f"Available groups: {', '.join(sorted(valid_ids))}"
-                        )
+                        return f"Group '{library_id}' not found. Available groups: {', '.join(sorted(valid_ids))}"
                 elif library_type == "feed":
-                    valid_ids = {str(l["libraryID"]) for l in libraries if l["type"] == "feed"}
+                    valid_ids = {str(library["libraryID"]) for library in libraries if library["type"] == "feed"}
                     if library_id not in valid_ids:
                         return (
                             f"Feed with libraryID '{library_id}' not found. "
@@ -946,9 +886,7 @@ def list_feeds(*, ctx: Context) -> str:
                 output.append(f"- **Library ID:** {feed['libraryID']}")
                 output.append("")
 
-            output.append(
-                "Use `zotero_get_feed_items` with a feed's library ID to view its items."
-            )
+            output.append("Use `zotero_get_feed_items` with a feed's library ID to view its items.")
             return "\n".join(output)
         finally:
             reader.close()
@@ -994,10 +932,7 @@ def get_feed_items(
             feed_info = next((f for f in feeds if f["libraryID"] == library_id), None)
             if not feed_info:
                 valid_ids = [str(f["libraryID"]) for f in feeds]
-                return (
-                    f"No feed found with libraryID={library_id}. "
-                    f"Valid feed IDs: {', '.join(valid_ids)}"
-                )
+                return f"No feed found with libraryID={library_id}. Valid feed IDs: {', '.join(valid_ids)}"
 
             items = reader.get_feed_items(library_id, limit=limit)
             if not items:
@@ -1031,15 +966,8 @@ def get_feed_items(
         return f"Error fetching feed items: {str(e)}"
 
 
-@mcp.tool(
-    name="zotero_get_recent",
-    description="Get recently added items to your Zotero library."
-)
-def get_recent(
-    limit: int | str = 10,
-    *,
-    ctx: Context
-) -> str:
+@mcp.tool(name="zotero_get_recent", description="Get recently added items to your Zotero library.")
+def get_recent(limit: int | str = 10, *, ctx: Context) -> str:
     """
     Get recently added items to your Zotero library.
 
@@ -1066,10 +994,15 @@ def get_recent(
 
         for i, item in enumerate(items, 1):
             added = item.get("data", {}).get("dateAdded", "Unknown")
-            output.extend(_utils.format_item_result(
-                item, index=i, abstract_len=0, include_tags=False,
-                extra_fields={"Added": added},
-            ))
+            output.extend(
+                _utils.format_item_result(
+                    item,
+                    index=i,
+                    abstract_len=0,
+                    include_tags=False,
+                    extra_fields={"Added": added},
+                )
+            )
 
         return "\n".join(output)
 

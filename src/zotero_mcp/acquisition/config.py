@@ -1,8 +1,11 @@
 from __future__ import annotations
+
 import json
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from zotero_mcp.config_paths import get_config_path
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +61,7 @@ class AcquisitionConfig:
 
 def load_acquisition_config(config_path: Path | str | None = None) -> AcquisitionConfig:
     if config_path is None:
-        config_path = Path.home() / ".config" / "zotero-mcp" / "config.json"
+        config_path = get_config_path()
 
     config_path = Path(config_path)
 
