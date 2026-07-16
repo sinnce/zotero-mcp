@@ -643,6 +643,51 @@ cd /home/sinnce/zotero-mcp
 uv run pytest tests/ -q
 ```
 
+### Local setup notes and dependency discrepancies
+
+The commands above describe the baseline checkout, but the complete test suite imports
+optional semantic-search modules during test collection. A plain `uv sync` therefore
+supports the core CLI and MCP server, but it does not install `chromadb`, and these
+tests fail to collect:
+
+- `tests/test_fulltext_local_mode.py`
+- `tests/test_semantic_search_quality.py`
+- `tests/test_semantic_stats.py`
+
+For a development environment that can collect the semantic-search tests, install the
+development extra:
+
+```bash
+uv sync --extra dev
+uv run pytest tests/ -q
+```
+
+This extra currently includes the `all` extra, which pulls in ChromaDB,
+sentence-transformers, PyTorch, and its transitive CUDA packages. That installation can
+be substantially larger than the core runtime, especially on CPU-only machines. The
+core server does not require these packages unless semantic search is used.
+
+The local checkout used for verification imported successfully and reported
+`Zotero MCP v0.2.2`. With `uv sync --extra dev`, 630 tests passed and 16 integration
+tests were deselected. Two tests currently fail because
+`tests/test_search_improvements.py` monkeypatches `search_module.Path`, while
+`src/zotero_mcp/tools/search.py` no longer exposes `Path`; this is a stale test/source
+contract rather than an installation failure.
+
+Recommended follow-up files for keeping the setup self-consistent:
+
+1. `pyproject.toml`: separate lightweight test dependencies from the broad `dev`
+   extra, or document the intentional heavyweight dependency footprint. Also decide
+   whether `all` should include the `ocr` and `docling-ocr` extras; it currently does
+   not, despite the installation table describing `all` as everything above.
+2. `README.md`: keep the baseline runtime setup and the full development/test setup
+   as separate commands, as shown here.
+3. `uv.lock`: add or refresh the lockfile if reproducible checkout environments are
+   required.
+4. `tests/test_search_improvements.py` and
+   `src/zotero_mcp/tools/search.py`: align the `Path` test contract with the current
+   implementation.
+
 **New acquisition features in this fork:**
 
 - **Semantic Scholar resolver** (`s2_enabled`): Queries the S2 Graph API for open-access PDFs after Unpaywall. Supports optional API key for higher rate limits.
