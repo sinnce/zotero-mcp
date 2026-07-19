@@ -10,6 +10,12 @@ First, install the Zotero MCP server using pip:
 pip install zotero-mcp-server
 ```
 
+For Linux and WSL, install the official Linux Zotero desktop tarball separately from
+[zotero.org/downloads](https://www.zotero.org/downloads/). `zotero-mcp` is not the Zotero desktop application.
+Start Zotero in the same environment before using local mode. On WSLg, use the inherited GUI environment; if no
+headed display is available, use a separate desktop session or Xvfb. Do not point a Linux Zotero profile at a
+Windows or cloud-synchronized data directory.
+
 ## Configuration
 
 The server needs to know how to connect to your Zotero library. There are two main ways to do this:
@@ -18,10 +24,10 @@ The server needs to know how to connect to your Zotero library. There are two ma
 
 If you're running Zotero 7 or newer on the same machine, you can connect to the local API:
 
-1. Enable the local API in Zotero's preferences:
+1. Enable local communication in Zotero's preferences:
    - Open Zotero
-   - Go to Edit > Preferences > Advanced > API
-   - Check "Enable local API"
+   - Go to Settings > Advanced
+   - Check "Allow other applications on this computer to communicate with Zotero"
 
 2. Set the environment variable:
    ```bash
@@ -34,7 +40,7 @@ If you want to connect to your Zotero library via the web API:
 
 1. Get your Zotero API key:
    - Go to [https://www.zotero.org/settings/keys](https://www.zotero.org/settings/keys)
-   - Create a new key with appropriate permissions (at least "Read" access)
+    - Create a new key with **Read** access for read-only use, or **Write** access for add/update/ingest operations
 
 2. Find your library ID:
    - For personal libraries, your user ID is available at the same page
@@ -46,6 +52,19 @@ If you want to connect to your Zotero library via the web API:
    export ZOTERO_LIBRARY_ID=your_library_id
    export ZOTERO_LIBRARY_TYPE=user  # or 'group' for group libraries
    ```
+
+Local API mode is read-only for Zotero library mutations. If you want local reads/full-text plus web writes, use
+hybrid mode: keep `ZOTERO_LOCAL=true` and also configure `ZOTERO_API_KEY` with write access plus
+`ZOTERO_LIBRARY_ID`/`ZOTERO_LIBRARY_TYPE`. Web-only mode can write through the Web API without `ZOTERO_LOCAL`.
+Never paste API keys into chat or commit them to a repository.
+
+### Configuration paths
+
+The default config file is `~/.config/zotero-mcp/config.json` and the default semantic database is
+`~/.config/zotero-mcp/chroma_db`. The resolved locations can be changed with
+`ZOTERO_MCP_CONFIG_HOME`, `ZOTERO_MCP_CONFIG_DIR`, `ZOTERO_MCP_CONFIG_PATH`, and
+`ZOTERO_MCP_CHROMA_DB_PATH`. Config files may contain API keys and must remain local/private, never in a cloud-synced
+or shared directory. Run `zotero-mcp setup-info` to inspect the paths used by the installed runtime.
 
 ## Integrating with Claude Desktop
 
@@ -76,16 +95,18 @@ To use Zotero MCP with Claude Desktop:
 
 ## **New**: Integrating with OpenAI's ChatGPT
 
-This is a new (September 2025) option available through the ChatGPT web app. For the web app, you must use [ChatGPT Developer mode](https://platform.openai.com/docs/guides/developer-mode) which may be restricted to a limited number of OpenAI platforms and apps. A paid subscription appears to be required.
+This is a legacy (September 2025) option available through the ChatGPT web app. For the web app, you must use [ChatGPT Developer mode](https://platform.openai.com/docs/guides/developer-mode), which may be restricted to a limited number of OpenAI platforms and apps.
 
 As of today, zotero-mcp is not available by default on as a web-based MCP, and it seems likely that many users will want to stick with a local MCP due to their large document libraries. Since ChatGPT does not support local MCPs natively through their desktop app (yet?) the way you can move forward is by tunneling.
 
-**Use at your own risk**
-While we think that the risk to many individuals will be quite low (Zotero libraries are often composed of large numbers of publically-available documents), the risk of data loss or theft will be present. We are working on a way to secure the server connection (this should be available soon), but even with absolute security there is still the exposure to the AI itself, which we leave to the user to judge for themselves. Please consider your situation before continuing with this guide.
+**Security warning:** The example below must not be exposed to the public without an authenticated reverse proxy or
+equivalent access control. `zotero-mcp` does not provide authentication for this transport. Prefer a local MCP client
+unless you have explicitly secured the entire tunnel and understand the data exposure.
 
 ### Setting up a desktop tunnel for zotero-mcp
 
-A tunnel makes your locally running `zotero-mcp` server securely available to a web service like ChatGPT. We recommend [ngrok](https://ngrok.com/) for this.
+A tunnel makes your locally running `zotero-mcp` server reachable by a web service like ChatGPT; it is not secure by
+itself. We recommend using an authenticated reverse proxy or equivalent access control before [ngrok](https://ngrok.com/).
 
 1.  **Install ngrok**: Follow the instructions on the [ngrok website](https://ngrok.com/download) to download and install it. Mac users can use `brew` and we have successfully tested this approach.
 
@@ -93,12 +114,12 @@ A tunnel makes your locally running `zotero-mcp` server securely available to a 
     ```bash
     # Make sure your Zotero environment variables are set first!
     # e.g., export ZOTERO_LOCAL=true
-    zotero-mcp serve --transport sse --host 0.0.0.0 --port 8000
+     zotero-mcp serve --transport sse --host 127.0.0.1 --port 8000
     ```
 
 Important: you should probably leave this terminal open in order to ensure tunnel traffic is successfully transiting to the server.
 
-3.  **Start the ngrok tunnel**: Open a *second* terminal and start ngrok, pointing it to the port your server is using (8000). Here is an instruction that will work on a mac
+3.  **Only after securing the endpoint, start the ngrok tunnel**: Open a *second* terminal and start ngrok, pointing it to the port your server is using (8000).
     ```bash
     ngrok http 8000
     ```
@@ -209,6 +230,21 @@ The source-level flow is:
 5. If the bridge succeeds, the returned provenance includes `bridge_session`; otherwise `acquire_paper` falls back to the standard HTTP download path.
 
 The bridge does not automate campus login. Start and authenticate the named Pinchtab browser session before calling `acquire_paper` with `session_name`.
+
+Check the layers separately: `curl http://127.0.0.1:9870/bridge/health` verifies that the bridge server is running;
+the named Pinchtab session must also be authenticated. A bridge can be healthy while the browser session is
+`missing`, `expired`, or `interactive_required`.
+
+To validate the authenticated path, run `acquire_paper` with the same session name used by your bridge profile and
+inspect the returned status. A successful browser download reports `status: "complete"` and
+`provenance.bridge_session`; an unavailable or expired session reports `status: "auth_required"` or an auth-state
+error instead of a generic HTTP download failure.
+
+Example MCP invocation:
+
+```text
+acquire_paper(identifier="10.1002/advs.202417635", session_name="libproxy-snu", auto_ingest=false)
+```
 
 
 ## Available Tools
