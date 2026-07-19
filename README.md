@@ -243,6 +243,11 @@ Full documentation is available at [Zotero MCP docs](https://stevenyuyy.us/zoter
 - Zotero 7+ (for local API with full-text access)
 - An MCP-compatible client (e.g., Claude Desktop, ChatGPT Developer Mode, Cherry Studio, Chorus)
 
+On Linux/WSL, install the official Linux Zotero desktop tarball separately; `zotero-mcp` does not install Zotero.
+Enable **Settings → Advanced → Allow other applications on this computer to communicate with Zotero**, then verify
+`http://127.0.0.1:23119/api/users/0/items?limit=1` before using local mode. WSLg requires a working headed display;
+keep Linux Zotero data in a local Linux directory rather than a Windows or cloud-synchronized folder.
+
 **For ChatGPT setup: see the [Getting Started guide](./docs/getting-started.md).**
 
 ### For Claude Desktop (example MCP client)
@@ -272,7 +277,7 @@ After installation, either:
 
 #### Usage
 
-1. Start Zotero desktop (make sure local API is enabled in preferences)
+1. Start Zotero desktop (make sure local communication is enabled in Settings → Advanced)
 2. Launch Claude Desktop
 3. Access the Zotero-MCP tool through Claude Desktop's tools interface
 
@@ -324,6 +329,11 @@ For accessing your Zotero library via the web API (useful for remote setups):
 zotero-mcp setup --no-local --api-key YOUR_API_KEY --library-id YOUR_LIBRARY_ID
 ```
 
+The local API is read-only for library writes. If you want local reads plus web writes, use hybrid mode with
+`ZOTERO_LOCAL=true`, `ZOTERO_API_KEY`, and `ZOTERO_LIBRARY_ID`; the API key must have **Write** permission. Web-only
+mode can write through the Web API without `ZOTERO_LOCAL`. Read-only web access only needs **Read** permission. Keep
+keys in local environment variables or a secret manager, never in source control.
+
 ### Environment Variables
 
 **Zotero Connection:**
@@ -341,6 +351,8 @@ zotero-mcp setup --no-local --api-key YOUR_API_KEY --library-id YOUR_LIBRARY_ID
 - `GEMINI_EMBEDDING_MODEL`: Gemini model name (gemini-embedding-001)
 - `GEMINI_BASE_URL`: Custom Gemini endpoint URL (optional, for use with compatible APIs)
 - `ZOTERO_DB_PATH`: Custom `zotero.sqlite` path (optional)
+- `ZOTERO_MCP_CONFIG_HOME`, `ZOTERO_MCP_CONFIG_DIR`, `ZOTERO_MCP_CONFIG_PATH`: Override config discovery
+- `ZOTERO_MCP_CHROMA_DB_PATH`: Override the semantic database location
 
 ### Command-Line Options
 
@@ -363,7 +375,7 @@ zotero-mcp update --force                  # Force update even if up to date
 
 # Semantic search database management
 zotero-mcp update-db                       # Update semantic search database (fast, metadata-only)
-zotero-mcp update-db --fulltext             # Update with full-text extraction (comprehensive but slower)
+zotero-mcp update-db --fulltext             # Full-text extraction; requires running Zotero local mode
 zotero-mcp update-db --force-rebuild       # Force complete database rebuild
 zotero-mcp update-db --fulltext --force-rebuild  # Rebuild with full-text extraction
 zotero-mcp update-db --fulltext --db-path "your_path_to/zotero.sqlite" # Customize your zotero database path
@@ -565,8 +577,9 @@ Use this section when you want to run the fork directly from a local clone, for 
 **Clone and install:**
 
 ```bash
-git clone https://github.com/your-fork/zotero-mcp /home/sinnce/zotero-mcp
-cd /home/sinnce/zotero-mcp
+export ZOTERO_MCP_REPO="${ZOTERO_MCP_REPO:-$HOME/zotero-mcp}"
+git clone https://github.com/your-fork/zotero-mcp "$ZOTERO_MCP_REPO"
+cd "$ZOTERO_MCP_REPO"
 uv sync
 
 # Optional: install VLM OCR support (adds marker-pdf and PyTorch)
@@ -625,13 +638,13 @@ uv sync --extra ocr
 **Run the MCP server from the checkout:**
 
 ```bash
-uv --directory /home/sinnce/zotero-mcp run zotero-mcp serve --transport stdio
+uv --directory "$ZOTERO_MCP_REPO" run zotero-mcp serve --transport stdio
 ```
 
 **Verify the import works:**
 
 ```bash
-cd /home/sinnce/zotero-mcp
+cd "$ZOTERO_MCP_REPO"
 uv run python -c "import zotero_mcp; print('import ok')"
 uv run zotero-mcp version
 ```
@@ -639,7 +652,7 @@ uv run zotero-mcp version
 **Run tests:**
 
 ```bash
-cd /home/sinnce/zotero-mcp
+cd "$ZOTERO_MCP_REPO"
 uv run pytest tests/ -q
 ```
 
@@ -698,13 +711,14 @@ Recommended follow-up files for keeping the setup self-consistent:
 
 ### Using this fork instead of the stable installed MCP
 
-If you are developing in a local clone (for example `/home/sinnce/zotero-mcp`) and want your MCP client to use the fork instead of the globally installed `zotero-mcp` binary, point the client at the repo with `uv --directory ... run`.
+If you are developing in a local clone and want your MCP client to use the fork instead of the globally installed
+`zotero-mcp` binary, set `ZOTERO_MCP_REPO` and point the client at the repo with `uv --directory ... run`.
 
 #### Step-by-step (OpenCode / ChatGPT-style local MCP config)
 
 1. Make sure the fork is up to date and its environment is installed:
    ```bash
-   cd /home/sinnce/zotero-mcp
+   cd "$ZOTERO_MCP_REPO"
    uv sync
    ```
 2. Update your MCP client config so the Zotero server command is repo-pinned instead of using the stable global binary.
@@ -715,9 +729,9 @@ If you are developing in a local clone (for example `/home/sinnce/zotero-mcp`) a
        "zotero": {
          "type": "local",
          "command": [
-           "/home/sinnce/.local/bin/uv",
+            "/absolute/path/to/uv",
            "--directory",
-           "/home/sinnce/zotero-mcp",
+            "/absolute/path/to/zotero-mcp",
            "run",
            "zotero-mcp",
            "serve",
@@ -736,7 +750,7 @@ If you are developing in a local clone (for example `/home/sinnce/zotero-mcp`) a
 4. Restart the MCP client so it drops the old stdio process and reconnects to the fork.
 5. Verify the forked CLI directly before relying on the client:
    ```bash
-   cd /home/sinnce/zotero-mcp
+    cd "$ZOTERO_MCP_REPO"
    uv run zotero-mcp version
    uv run python -m zotero_mcp.cli serve --transport stdio
    ```
@@ -808,7 +822,7 @@ After restarting your MCP client, run `resolve_paper_access` with the same DOI. 
 These targeted tests cover the Unpaywall client and the MCP resolve tool wrapper:
 
 ```bash
-cd /home/sinnce/zotero-mcp
+cd "$ZOTERO_MCP_REPO"
 uv run pytest tests/test_unpaywall.py tests/test_tool_resolve.py
 ```
 
@@ -818,8 +832,12 @@ If you are also testing institutional access, the Unpaywall steps above are stil
 
 ### Unit Tests
 ```bash
-uv run pytest tests/     # 294 tests, ~2 seconds
+uv sync --extra dev
+uv run pytest tests/ -q
 ```
+
+The full suite includes optional semantic-search dependencies and its size depends on the checkout revision; use the
+focused commands above when validating a core installation.
 
 ### Integration Test Plan
 A 45-point live integration test plan is included at `docs/integration-test-plan.md`. It's designed to be given to Claude in Claude Desktop, which will execute each test against your real Zotero library. Tests cover all tools, PDF attachment cascade, attach_mode, BetterBibTeX lookups, and multi-step showcase prompts. See the file for full instructions.
