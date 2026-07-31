@@ -109,7 +109,7 @@ def test_health_fails_closed_for_malformed_json():
     assert available is False
 
 
-def test_download_maps_unauthorized_without_exposing_token():
+def test_download_maps_unauthorized_to_bridge_unavailable_without_exposing_token():
     # Given: a configured client whose bridge rejects its credentials.
     token = "test-token-that-must-not-appear-in-errors-or-logs"
     client = BridgeClient(auth_token=token)
@@ -120,7 +120,7 @@ def test_download_maps_unauthorized_without_exposing_token():
         result = client.download(request)
 
     # Then: the authorization result is explicit and redacted.
-    assert result.error_code == "AUTH_REQUIRED"
+    assert result.error_code == "BRIDGE_UNAVAILABLE"
     assert result.auth_state == "missing"
     assert token not in (result.message or "")
 
@@ -134,7 +134,7 @@ def test_download_preserves_domain_blocked_for_acquisition_fallback():
     with patch(
         "zotero_mcp.acquisition.bridge_client.httpx.post",
         return_value=_response(
-            403,
+            200,
             {"status": "failed", "error_code": "DOMAIN_BLOCKED", "auth_state": "ready", "file_path": None},
         ),
     ):
@@ -152,7 +152,7 @@ def test_download_preserves_valid_auth_required_response():
     with patch(
         "zotero_mcp.acquisition.bridge_client.httpx.post",
         return_value=_response(
-            403,
+            200,
             {"status": "auth_required", "auth_state": "expired", "error_code": "AUTH_REQUIRED", "file_path": None},
         ),
     ):
@@ -175,7 +175,7 @@ def test_download_fails_stably_when_response_json_is_malformed():
     assert result.status == "failed"
     assert result.auth_state == "missing"
     assert result.error_code == "BRIDGE_UNAVAILABLE"
-    assert result.message == "Bridge authentication is unavailable"
+    assert result.message == "Bridge is unavailable"
 
 
 @pytest.mark.parametrize("payload", [[], "not an object", 1])

@@ -29,9 +29,15 @@ BridgeErrorCode = BridgeWireErrorCode | BridgeSyntheticErrorCode
 _VALID_STATUSES: Final[frozenset[str]] = frozenset({"complete", "failed", "auth_required"})
 _VALID_AUTH_STATES: Final[frozenset[str]] = frozenset({"ready", "expired", "missing", "interactive_required"})
 _AUTH_REQUIRED_STATES: Final[frozenset[str]] = frozenset({"missing", "expired", "interactive_required"})
-_FAILED_ERROR_CODES: Final[frozenset[str]] = frozenset(
-    {"HTML_LANDING", "NO_PDF", "ACCESS_DENIED", "CAPTCHA", "TIMEOUT", "DOMAIN_BLOCKED", "CANCELLED"}
-)
+_FAILED_AUTH_STATES: Final[dict[str, frozenset[str]]] = {
+    "ACCESS_DENIED": frozenset({"ready"}),
+    "CANCELLED": frozenset({"ready"}),
+    "CAPTCHA": frozenset({"interactive_required"}),
+    "DOMAIN_BLOCKED": frozenset({"ready", "missing"}),
+    "HTML_LANDING": frozenset({"ready"}),
+    "NO_PDF": frozenset({"ready"}),
+    "TIMEOUT": frozenset({"ready"}),
+}
 _DOMAIN_PATTERN = re.compile(
     r"(?=.{1,253}\Z)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\Z"
 )
@@ -109,7 +115,7 @@ class BridgeClient:
             status="failed",
             auth_state="missing",
             error_code="BRIDGE_UNAVAILABLE",
-            message="Bridge authentication is unavailable",
+            message="Bridge is unavailable",
         )
 
     def _timeout_result(self) -> BridgeDownloadResult:
@@ -131,7 +137,7 @@ class BridgeClient:
         status = payload.get("status")
         auth_state = payload.get("auth_state")
         error_code = payload.get("error_code")
-        if status not in _VALID_STATUSES:
+        if not isinstance(status, str) or status not in _VALID_STATUSES:
             return None
         if status == "complete":
             if auth_state != "ready" or "error_code" not in payload or error_code is not None:
@@ -147,10 +153,17 @@ class BridgeClient:
         if "file_path" in payload and payload["file_path"] is not None:
             return None
         if status == "auth_required":
-            if auth_state not in _AUTH_REQUIRED_STATES or error_code != "AUTH_REQUIRED":
+            if (
+                not isinstance(auth_state, str)
+                or auth_state not in _AUTH_REQUIRED_STATES
+                or error_code != "AUTH_REQUIRED"
+            ):
                 return None
             return BridgeDownloadResult(status=status, auth_state=auth_state, error_code=error_code)
-        if auth_state not in _VALID_AUTH_STATES or error_code not in _FAILED_ERROR_CODES:
+        if not isinstance(auth_state, str) or auth_state not in _VALID_AUTH_STATES or not isinstance(error_code, str):
+            return None
+        allowed_auth_states = _FAILED_AUTH_STATES.get(error_code)
+        if allowed_auth_states is None or auth_state not in allowed_auth_states:
             return None
         return BridgeDownloadResult(status=status, auth_state=auth_state, error_code=error_code)
 
@@ -182,20 +195,14 @@ class BridgeClient:
                 headers=headers,
                 timeout=request.timeout_ms / 1000 + 5,
             )
-        except httpx.HTTPError:
+        except httpx.TimeoutException:
             return self._timeout_result()
+        except httpx.HTTPError:
+            return self._unavailable_result()
 
-        result = self._parse_download_response(resp)
-        if result is not None:
-            return result
-        if resp.status_code == 401:
-            return BridgeDownloadResult(
-                status="failed",
-                auth_state="missing",
-                error_code="AUTH_REQUIRED",
-                message="Bridge authentication was rejected",
-            )
-        return self._unavailable_result()
+        if resp.status_code != 200:
+            return self._unavailable_result()
+        return self._parse_download_response(resp) or self._unavailable_result()
 
     def is_available(self) -> bool:
         headers = self._headers()
