@@ -11,7 +11,9 @@ BRIDGE_SERVER_URL = "http://127.0.0.1:9870"
 _MAX_ALLOWED_DOMAINS = 32
 _MAX_DOMAIN_LENGTH = 253
 _MAX_NESTED_URL_DEPTH = 2
-_DOMAIN_PATTERN = re.compile(r"(?=.{1,253}\Z)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\Z")
+_DOMAIN_PATTERN = re.compile(
+    r"(?=.{1,253}\Z)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\Z"
+)
 
 
 @dataclass

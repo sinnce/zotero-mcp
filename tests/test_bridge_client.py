@@ -22,9 +22,10 @@ def test_missing_token_fails_closed_without_http_request(monkeypatch):
     request = BridgeDownloadRequest("10.1000/example", "https://publisher.example/paper.pdf", "campus")
 
     # When: availability and a download are requested.
-    with patch("zotero_mcp.acquisition.bridge_client.httpx.get") as get, patch(
-        "zotero_mcp.acquisition.bridge_client.httpx.post"
-    ) as post:
+    with (
+        patch("zotero_mcp.acquisition.bridge_client.httpx.get") as get,
+        patch("zotero_mcp.acquisition.bridge_client.httpx.post") as post,
+    ):
         available = client.is_available()
         result = client.download(request)
 
@@ -43,9 +44,13 @@ def test_health_and_download_use_identical_bearer_auth_headers():
     request = BridgeDownloadRequest("10.1000/example", "https://publisher.example/paper.pdf", "campus")
 
     # When: the client probes health and downloads.
-    with patch("zotero_mcp.acquisition.bridge_client.httpx.get", return_value=_response(200)) as get, patch(
-        "zotero_mcp.acquisition.bridge_client.httpx.post", return_value=_response(200, {"status": "complete", "auth_state": "ready"})
-    ) as post:
+    with (
+        patch("zotero_mcp.acquisition.bridge_client.httpx.get", return_value=_response(200)) as get,
+        patch(
+            "zotero_mcp.acquisition.bridge_client.httpx.post",
+            return_value=_response(200, {"status": "complete", "auth_state": "ready"}),
+        ) as post,
+    ):
         assert client.is_available() is True
         client.download(request)
 

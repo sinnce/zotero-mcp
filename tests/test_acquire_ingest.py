@@ -246,6 +246,7 @@ class TestAcquireIngest:
 
     async def test_direct_browser_access_precedes_libproxy_fallback(self, mock_ctx):
         resolution = make_resolution(metadata={"title": "Campus Access"}, requires_session=True)
+        resolution.best_location.url = "https://libproxy.snu.ac.kr/link.n2s?url=https%3A%2F%2Fdoi.org%2F10.1234%2Ftest"
         resolution.best_location.session_kind = "libproxy"
 
         config = AcquisitionConfig(

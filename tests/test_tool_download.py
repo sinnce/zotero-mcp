@@ -1,10 +1,10 @@
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
-from pathlib import Path
-from unittest.mock import AsyncMock, patch, MagicMock
+
+from zotero_mcp.acquisition.bridge_client import BridgeDownloadResult
+from zotero_mcp.acquisition.types import AccessLocation, AccessResolution, ArtifactDownload, PipelineError
 from zotero_mcp.tools.download_paper_artifact import download_paper_artifact
-from zotero_mcp.acquisition.types import ArtifactDownload, PipelineError, ProvenanceMetadata
-from zotero_mcp.acquisition.bridge_client import BridgeClient, BridgeDownloadRequest, BridgeDownloadResult
-from zotero_mcp.acquisition.types import AccessResolution, AccessLocation
 
 
 @pytest.fixture

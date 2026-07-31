@@ -77,6 +77,7 @@ def _should_try_direct_before_libproxy(config, resolution, location, session_nam
         and location.session_kind == "libproxy"
         and inst.enabled
         and inst.provider == "libproxy"
+        and _is_explicit_libproxy_url(config, location)
     )
 
 
