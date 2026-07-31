@@ -224,7 +224,7 @@ This order keeps the browser bridge opt-in while the new auth requirement is bei
 
 #### Allowed-domain behavior
 
-Every bridge call now carries an explicit allowed-domain set.
+`GET /bridge/health` now carries bearer auth only. `POST /bridge/download` carries bearer auth plus an explicit allowed-domain set.
 
 - The caller derives hosts from the requested `candidate_url`.
 - For LibProxy and other nested redirect URLs, the caller also derives hosts from nested targets, such as the proxied `url=` destination.

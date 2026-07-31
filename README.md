@@ -177,7 +177,7 @@ The ownership split is:
 - `zotero-mcp`: resolve access and decide whether a session-backed location should be used
 - `opencode-deep-research`: keep the named browser session alive and perform the download
 
-Bridge auth is now fail-closed. The caller must send both a bearer token and an explicit allowed-domain list on bridge health and download requests. If `BRIDGE_AUTH_TOKEN` is missing on the caller side, `zotero-mcp` skips bridge calls and stays on the standard direct-download path.
+Bridge auth is now fail-closed. `GET /bridge/health` carries bearer auth only. `POST /bridge/download` carries bearer auth plus the required derived allowed-domain list. If `BRIDGE_AUTH_TOKEN` is missing on the caller side, `zotero-mcp` skips bridge calls and stays on the standard direct-download path.
 
 ## 🧠 Semantic Search
 
@@ -528,7 +528,7 @@ Operator notes:
 
 #### Allowed-domain behavior
 
-The caller now sends an explicit allowed-domain set with every bridge request. The bridge does not auto-trust arbitrary redirects.
+The caller sends an explicit allowed-domain set on `POST /bridge/download`. `GET /bridge/health` uses bearer auth only. The bridge does not auto-trust arbitrary redirects.
 
 - Candidate hosts are derived from the requested `candidate_url`.
 - For LibProxy and similar nested redirectors, hosts are also derived from nested target URLs such as the `url=` value inside the proxy URL.
