@@ -1,21 +1,24 @@
 from __future__ import annotations
+
 import logging
 import tempfile
 from pathlib import Path
 from urllib.parse import urlparse
-from zotero_mcp._app import mcp
+
 from fastmcp import Context
-from zotero_mcp.acquisition.resolver import resolve_access
-from zotero_mcp.acquisition.config import load_acquisition_config
+
+from zotero_mcp._app import mcp
 from zotero_mcp.acquisition.bridge_client import BridgeClient, BridgeDownloadRequest
+from zotero_mcp.acquisition.config import load_acquisition_config
 from zotero_mcp.acquisition.download import ArtifactDownloader
 from zotero_mcp.acquisition.ingest import ingest_paper
+from zotero_mcp.acquisition.resolver import resolve_access
 from zotero_mcp.acquisition.types import PipelineError, ProvenanceMetadata
 from zotero_mcp.tools._helpers import _get_write_client
 
 logger = logging.getLogger(__name__)
 
-_EXPLICIT_PAYWALL_CODES = {"AUTH_REQUIRED", "HTML_LANDING", "ACCESS_DENIED"}
+_EXPLICIT_PAYWALL_CODES = {"AUTH_REQUIRED", "HTML_LANDING", "ACCESS_DENIED", "DOMAIN_BLOCKED"}
 
 
 def _run_auto_ingest(ctx, resolution, file_path, identifier):
