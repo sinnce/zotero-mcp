@@ -51,6 +51,8 @@ def ingest_paper(
         provenance = ProvenanceMetadata()
 
     existing_key = _check_duplicate(read_zot, doi, arxiv_id, title)
+    if existing_key is None and write_zot is not read_zot:
+        existing_key = _check_duplicate(write_zot, doi, arxiv_id, title)
     if existing_key:
         return IngestResult(
             item_key=existing_key,
