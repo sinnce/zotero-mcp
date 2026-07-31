@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import re
 from dataclasses import dataclass
+from typing import Final, Literal
 from urllib.parse import parse_qsl, urlparse
 
 import httpx
@@ -11,6 +12,21 @@ BRIDGE_SERVER_URL = "http://127.0.0.1:9870"
 _MAX_ALLOWED_DOMAINS = 32
 _MAX_DOMAIN_LENGTH = 253
 _MAX_NESTED_URL_DEPTH = 2
+BridgeStatus = Literal["complete", "failed", "auth_required"]
+BridgeAuthState = Literal["ready", "missing", "expired"]
+BridgeErrorCode = Literal[
+    "ACCESS_DENIED",
+    "AUTH_REQUIRED",
+    "BRIDGE_UNAVAILABLE",
+    "DOMAIN_BLOCKED",
+    "HTML_LANDING",
+    "TIMEOUT",
+]
+_VALID_STATUSES: Final[frozenset[str]] = frozenset({"complete", "failed", "auth_required"})
+_VALID_AUTH_STATES: Final[frozenset[str]] = frozenset({"ready", "missing", "expired"})
+_VALID_ERROR_CODES: Final[frozenset[str]] = frozenset(
+    {"ACCESS_DENIED", "AUTH_REQUIRED", "BRIDGE_UNAVAILABLE", "DOMAIN_BLOCKED", "HTML_LANDING", "TIMEOUT"}
+)
 _DOMAIN_PATTERN = re.compile(
     r"(?=.{1,253}\Z)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\Z"
 )
@@ -27,10 +43,10 @@ class BridgeDownloadRequest:
 
 @dataclass
 class BridgeDownloadResult:
-    status: str
-    auth_state: str
+    status: BridgeStatus
+    auth_state: BridgeAuthState
     file_path: str | None = None
-    error_code: str | None = None
+    error_code: BridgeErrorCode | None = None
     message: str | None = None
 
 
@@ -99,6 +115,32 @@ class BridgeClient:
             message="Bridge request failed",
         )
 
+    def _parse_download_response(self, response: httpx.Response) -> BridgeDownloadResult | None:
+        try:
+            payload = response.json()
+        except ValueError:
+            return None
+        if not isinstance(payload, dict):
+            return None
+
+        status = payload.get("status")
+        auth_state = payload.get("auth_state")
+        error_code = payload.get("error_code")
+        if status not in _VALID_STATUSES or auth_state not in _VALID_AUTH_STATES:
+            return None
+        if status == "complete":
+            if error_code is not None:
+                return None
+            file_path = payload.get("file_path")
+            return BridgeDownloadResult(
+                status=status,
+                auth_state=auth_state,
+                file_path=file_path if isinstance(file_path, str) else None,
+            )
+        if error_code not in _VALID_ERROR_CODES:
+            return None
+        return BridgeDownloadResult(status=status, auth_state=auth_state, error_code=error_code)
+
     def download(self, request: BridgeDownloadRequest) -> BridgeDownloadResult:
         headers = self._headers()
         if headers is None:
@@ -130,6 +172,9 @@ class BridgeClient:
         except httpx.HTTPError:
             return self._timeout_result()
 
+        result = self._parse_download_response(resp)
+        if result is not None:
+            return result
         if resp.status_code == 401:
             return BridgeDownloadResult(
                 status="failed",
@@ -137,27 +182,7 @@ class BridgeClient:
                 error_code="AUTH_REQUIRED",
                 message="Bridge authentication was rejected",
             )
-        if resp.status_code >= 400:
-            try:
-                error_data = resp.json()
-            except ValueError:
-                error_data = {}
-            if error_data.get("error_code") == "DOMAIN_BLOCKED":
-                return BridgeDownloadResult(
-                    status="failed",
-                    auth_state=error_data.get("auth_state", "missing"),
-                    error_code="DOMAIN_BLOCKED",
-                    message="Bridge rejected the candidate domain",
-                )
-            return BridgeDownloadResult(
-                status="failed",
-                auth_state="missing",
-                error_code="BRIDGE_UNAVAILABLE",
-                message="Bridge request failed",
-            )
-
-        data = resp.json()
-        return BridgeDownloadResult(**{key: data.get(key) for key in BridgeDownloadResult.__dataclass_fields__})
+        return self._unavailable_result()
 
     def is_available(self) -> bool:
         headers = self._headers()
