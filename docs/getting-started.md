@@ -202,29 +202,20 @@ Institutional access is decided by `zotero-mcp`, but browser automation is deleg
 
 #### Operator setup for authenticated bridge calls
 
-The bridge now expects authenticated caller requests. Set the token on both the `zotero-mcp` side and the bridge-server side, and keep the value private.
-
-```bash
-# caller side, where zotero-mcp runs
-export BRIDGE_AUTH_TOKEN=<generate-a-random-32+-character-token>
-export BRIDGE_ALLOWED_DOMAINS=publisher.example,cdn.publisher.example
-
-# bridge server side, must match the caller token exactly
-export BRIDGE_AUTH_TOKEN=<generate-a-random-32+-character-token>
-```
+The bridge now expects authenticated caller requests. Set `BRIDGE_AUTH_TOKEN` on both the `zotero-mcp` side and the bridge-server side, and keep the value private.
 
 What to keep in mind:
 
 - `BRIDGE_AUTH_TOKEN` must be the same on both sides and should be at least 32 characters long.
 - Store it in a private env file, secret manager, or service definition, not in committed config or shared screenshots.
 - Missing caller `BRIDGE_AUTH_TOKEN` disables bridge calls. `acquire_paper` then stays on the normal direct-download path.
-- `BRIDGE_ALLOWED_DOMAINS` is required for bridge requests and should contain only operator-approved extra hostnames.
+- `BRIDGE_ALLOWED_DOMAINS` is optional and should contain only operator-approved extra hostnames that are not already derived from the candidate URL or nested redirect targets.
 
 #### Caller-first rollout
 
 Roll this out from the caller side first.
 
-1. Set `BRIDGE_AUTH_TOKEN` and `BRIDGE_ALLOWED_DOMAINS` where `zotero-mcp` runs.
+1. Set `BRIDGE_AUTH_TOKEN` where `zotero-mcp` runs. Add `BRIDGE_ALLOWED_DOMAINS` only when you need extra approved hosts.
 2. Confirm normal acquisition still works when no bridge session is used.
 3. Set the same `BRIDGE_AUTH_TOKEN` on the bridge server.
 4. Start using `session_name` for institutional downloads.
@@ -237,7 +228,7 @@ Every bridge call now carries an explicit allowed-domain set.
 
 - The caller derives hosts from the requested `candidate_url`.
 - For LibProxy and other nested redirect URLs, the caller also derives hosts from nested targets, such as the proxied `url=` destination.
-- `BRIDGE_ALLOWED_DOMAINS` adds normalized operator-managed extras for known publisher CDNs or secondary download hosts.
+- `BRIDGE_ALLOWED_DOMAINS` adds optional normalized operator-managed extras for known publisher CDNs or secondary download hosts.
 - Redirects never auto-expand trust. If a later hop lands on a host outside the derived or explicit allowlist, the bridge rejects it.
 
 The source-level flow is:

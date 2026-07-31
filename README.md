@@ -516,23 +516,14 @@ Some papers resolve to URLs that need an authenticated browser session, such as 
 
 #### Operator bridge setup
 
-Configure matching bridge auth on both sides before expecting institutional browser downloads to work:
-
-```bash
-# caller environment, for example the MCP client or service manager that starts zotero-mcp
-export BRIDGE_AUTH_TOKEN=<generate-a-random-32+-character-token>
-export BRIDGE_ALLOWED_DOMAINS=publisher.example,cdn.publisher.example
-
-# bridge server environment, must use the same token value
-export BRIDGE_AUTH_TOKEN=<generate-a-random-32+-character-token>
-```
+Configure matching bridge auth on both sides before expecting institutional browser downloads to work. Set `BRIDGE_AUTH_TOKEN` in the caller environment and in the bridge-server environment, and keep the value private.
 
 Operator notes:
 
 - `BRIDGE_AUTH_TOKEN` must match on the caller and the bridge server.
 - Use a private secret store, service manager secret field, or local env file that is not committed. Do not put the token in docs, screenshots, shell history snippets, or tracked config.
-- Generate a token that is at least 32 characters long. The placeholder above is the only value that should appear in documentation.
-- `BRIDGE_ALLOWED_DOMAINS` is caller-side policy. It is required for bridge requests and should list only the extra operator-approved domains you want to allow.
+- Generate a token that is at least 32 characters long.
+- `BRIDGE_ALLOWED_DOMAINS` is an optional caller-side policy input for extra operator-approved domains. Candidate hosts and nested redirect targets are derived automatically.
 - Missing `BRIDGE_AUTH_TOKEN` on the caller disables bridge calls by design. That gives you a caller-first rollout path because direct HTTP acquisition still runs while the bridge remains opt-in.
 
 #### Allowed-domain behavior
@@ -541,7 +532,7 @@ The caller now sends an explicit allowed-domain set with every bridge request. T
 
 - Candidate hosts are derived from the requested `candidate_url`.
 - For LibProxy and similar nested redirectors, hosts are also derived from nested target URLs such as the `url=` value inside the proxy URL.
-- `BRIDGE_ALLOWED_DOMAINS` adds operator-managed extra domains after hostname normalization. Use it for known publisher CDN hosts or stable secondary download hosts that are not always visible in the initial URL.
+- `BRIDGE_ALLOWED_DOMAINS` adds optional operator-managed extra domains after hostname normalization. Use it for known publisher CDN hosts or stable secondary download hosts that are not always visible in the initial URL.
 - Redirects never expand trust automatically. If a redirected host is not in the derived or operator-approved set, the bridge rejects it instead of following it.
 - Keep this list tight. Add only the domains you intend to trust for downloads.
 
@@ -589,7 +580,7 @@ When the input to `resolve_paper_access` is a URL, the resolver first checks whe
 | Health check | `GET /bridge/health` |
 | Session identifier | `session_name` string (e.g. `"libproxy-snu"`) |
 | Caller auth env | `BRIDGE_AUTH_TOKEN`, same value as the bridge server |
-| Caller allowlist env | `BRIDGE_ALLOWED_DOMAINS`, comma-separated normalized extra hosts |
+| Caller allowlist env | `BRIDGE_ALLOWED_DOMAINS`, optional comma-separated normalized extra hosts |
 
 ### Development Setup (Dev Checkout)
 
