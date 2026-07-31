@@ -300,8 +300,8 @@ async def test_bridge_institutional():
         patch("zotero_mcp.tools.acquire_paper.BridgeClient") as MockBridgeClient,
     ):
         mock_bridge = MagicMock()
-        mock_bridge.is_available.return_value = True
-        mock_bridge.download.return_value = bridge_result
+        mock_bridge.is_available = AsyncMock(return_value=True)
+        mock_bridge.download = AsyncMock(return_value=bridge_result)
         MockBridgeClient.return_value = mock_bridge
 
         result = await acquire_paper("10.xxx/institutional-only", session_name="libproxy-snu")

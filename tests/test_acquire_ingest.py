@@ -269,8 +269,8 @@ class TestAcquireIngest:
             patch("zotero_mcp.tools.acquire_paper.BridgeClient") as MockBridge,
         ):
             mock_bridge = MagicMock()
-            mock_bridge.is_available.return_value = True
-            mock_bridge.download.return_value = direct_result
+            mock_bridge.is_available = AsyncMock(return_value=True)
+            mock_bridge.download = AsyncMock(return_value=direct_result)
             MockBridge.return_value = mock_bridge
 
             result = await acquire_paper("10.1234/test", session_name="libproxy-snu", ctx=mock_ctx)
@@ -278,7 +278,7 @@ class TestAcquireIngest:
         assert result["status"] == "complete"
         assert result["message"] == "Downloaded via direct browser access"
         assert result["provenance"]["access_source"] == "direct"
-        mock_bridge.download.assert_called_once()
+        mock_bridge.download.assert_awaited_once()
         direct_request = mock_bridge.download.call_args[0][0]
         assert direct_request.candidate_url == "https://doi.org/10.1234/test"
 
@@ -313,8 +313,8 @@ class TestAcquireIngest:
             patch("zotero_mcp.tools.acquire_paper.BridgeClient") as MockBridge,
         ):
             mock_bridge = MagicMock()
-            mock_bridge.is_available.return_value = True
-            mock_bridge.download.side_effect = [direct_result, proxy_result]
+            mock_bridge.is_available = AsyncMock(return_value=True)
+            mock_bridge.download = AsyncMock(side_effect=[direct_result, proxy_result])
             MockBridge.return_value = mock_bridge
 
             result = await acquire_paper("10.1234/test", session_name="libproxy-snu", ctx=mock_ctx)
@@ -352,8 +352,8 @@ class TestAcquireIngest:
             patch("zotero_mcp.tools.acquire_paper.BridgeClient") as MockBridge,
         ):
             mock_bridge = MagicMock()
-            mock_bridge.is_available.return_value = True
-            mock_bridge.download.side_effect = [direct_result, proxy_result]
+            mock_bridge.is_available = AsyncMock(return_value=True)
+            mock_bridge.download = AsyncMock(side_effect=[direct_result, proxy_result])
             MockBridge.return_value = mock_bridge
 
             result = await acquire_paper("10.1234/test", session_name="libproxy-snu", ctx=mock_ctx)
@@ -388,8 +388,8 @@ class TestAcquireIngest:
             patch("zotero_mcp.tools.acquire_paper.BridgeClient") as MockBridge,
         ):
             mock_bridge = MagicMock()
-            mock_bridge.is_available.return_value = True
-            mock_bridge.download.return_value = bridge_result
+            mock_bridge.is_available = AsyncMock(return_value=True)
+            mock_bridge.download = AsyncMock(return_value=bridge_result)
             MockBridge.return_value = mock_bridge
 
             result = await acquire_paper(resolution.best_location.url, session_name="libproxy-snu", ctx=mock_ctx)
@@ -397,6 +397,6 @@ class TestAcquireIngest:
         assert result["status"] == "complete"
         assert result["provenance"]["bridge_session"] == "libproxy-snu"
         assert result["provenance"]["access_source"] == "institutional"
-        mock_bridge.download.assert_called_once()
+        mock_bridge.download.assert_awaited_once()
         request = mock_bridge.download.call_args[0][0]
         assert request.candidate_url == resolution.best_location.url

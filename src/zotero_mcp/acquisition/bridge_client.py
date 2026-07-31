@@ -212,10 +212,15 @@ class BridgeClient:
             resp = httpx.get(f"{self.base_url}/bridge/health", headers=headers, timeout=2.0)
         except httpx.HTTPError:
             return False
-        if resp.status_code != 200 or not resp.headers.get("content-type", "").lower().startswith("application/json"):
+        return self._is_healthy_response(resp)
+
+    def _is_healthy_response(self, response: httpx.Response) -> bool:
+        if response.status_code != 200 or not response.headers.get("content-type", "").lower().startswith(
+            "application/json"
+        ):
             return False
         try:
-            payload = resp.json()
+            payload = response.json()
         except ValueError:
             return False
         if not isinstance(payload, dict):

@@ -8,7 +8,8 @@ from urllib.parse import urlparse
 from fastmcp import Context
 
 from zotero_mcp._app import mcp
-from zotero_mcp.acquisition.bridge_client import BridgeClient, BridgeDownloadRequest
+from zotero_mcp.acquisition.async_bridge_client import AsyncBridgeClient as BridgeClient
+from zotero_mcp.acquisition.bridge_client import BridgeDownloadRequest
 from zotero_mcp.acquisition.config import load_acquisition_config
 from zotero_mcp.acquisition.download import ArtifactDownloader
 from zotero_mcp.acquisition.ingest import ingest_paper
@@ -19,6 +20,7 @@ from zotero_mcp.tools._helpers import _get_write_client
 logger = logging.getLogger(__name__)
 
 _EXPLICIT_PAYWALL_CODES = {"AUTH_REQUIRED", "HTML_LANDING", "ACCESS_DENIED", "DOMAIN_BLOCKED"}
+_TERMINAL_BRIDGE_CODES = {"AUTH_REQUIRED", "DOMAIN_BLOCKED", "CAPTCHA", "CANCELLED"}
 
 
 def _run_auto_ingest(ctx, resolution, file_path, identifier):
@@ -66,6 +68,10 @@ def _bridge_doi(identifier: str, resolution) -> str:
 
 def _is_explicit_paywall(result) -> bool:
     return result.status == "auth_required" or result.error_code in _EXPLICIT_PAYWALL_CODES
+
+
+def _is_terminal_bridge_result(result) -> bool:
+    return result.status == "auth_required" or result.error_code in _TERMINAL_BRIDGE_CODES
 
 
 def _should_try_direct_before_libproxy(config, resolution, location, session_name: str | None) -> bool:
@@ -123,12 +129,12 @@ async def acquire_paper(
 
     if session_name and (location.requires_session or _is_explicit_libproxy_url(config, location)):
         bridge = BridgeClient()
-        if bridge.is_available():
+        if await bridge.is_available():
             bridge_identifier = _bridge_doi(identifier, resolution)
             result = None
 
             if _should_try_direct_before_libproxy(config, resolution, location, session_name):
-                direct_result = bridge.download(
+                direct_result = await bridge.download(
                     BridgeDownloadRequest(
                         doi=bridge_identifier,
                         candidate_url=f"https://doi.org/{resolution.identifier_value}",
@@ -149,15 +155,17 @@ async def acquire_paper(
                     return out
 
                 if _is_explicit_paywall(direct_result):
-                    result = bridge.download(
+                    result = await bridge.download(
                         BridgeDownloadRequest(
                             doi=bridge_identifier,
                             candidate_url=location.url,
                             session_name=session_name,
                         )
                     )
+                else:
+                    result = direct_result
             else:
-                result = bridge.download(
+                result = await bridge.download(
                     BridgeDownloadRequest(
                         doi=bridge_identifier,
                         candidate_url=location.url,
@@ -177,6 +185,11 @@ async def acquire_paper(
                     if item_key:
                         out["zotero_item_key"] = item_key
                 return out
+            if result and _is_terminal_bridge_result(result):
+                return {
+                    "status": "failed",
+                    "message": f"[{result.error_code or 'BRIDGE_UNAVAILABLE'}] Bridge download failed",
+                }
 
     downloader = ArtifactDownloader(config)
     dest_dir = Path(tempfile.mkdtemp(prefix="zotero-mcp-acquire-"))

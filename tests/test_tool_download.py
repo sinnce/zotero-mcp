@@ -101,8 +101,8 @@ class TestBridgeFallback:
             patch("zotero_mcp.tools.acquire_paper.BridgeClient") as MockBridge,
         ):
             mock_instance = MagicMock()
-            mock_instance.is_available.return_value = True
-            mock_instance.download.return_value = bridge_result
+            mock_instance.is_available = AsyncMock(return_value=True)
+            mock_instance.download = AsyncMock(return_value=bridge_result)
             MockBridge.return_value = mock_instance
 
             from zotero_mcp.tools.acquire_paper import acquire_paper
@@ -112,7 +112,7 @@ class TestBridgeFallback:
         assert result["status"] == "complete"
         assert result["provenance"]["bridge_session"] == "libproxy-snu"
         assert result["provenance"]["access_source"] == "institutional"
-        mock_instance.download.assert_called_once()
+        mock_instance.download.assert_awaited_once()
         call_arg = mock_instance.download.call_args[0][0]
         assert call_arg.session_name == "libproxy-snu"
         assert call_arg.candidate_url == resolution.best_location.url
@@ -131,7 +131,7 @@ class TestBridgeFallback:
             patch("zotero_mcp.tools.acquire_paper.ArtifactDownloader") as MockDownloader,
         ):
             mock_bridge = MagicMock()
-            mock_bridge.is_available.return_value = False
+            mock_bridge.is_available = AsyncMock(return_value=False)
             MockBridge.return_value = mock_bridge
 
             mock_dl = MagicMock()
