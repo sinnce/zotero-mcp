@@ -49,7 +49,10 @@ def test_health_and_download_use_identical_bearer_auth_headers():
         patch("zotero_mcp.acquisition.bridge_client.httpx.get", return_value=_response(200)) as get,
         patch(
             "zotero_mcp.acquisition.bridge_client.httpx.post",
-            return_value=_response(200, {"status": "complete", "auth_state": "ready"}),
+            return_value=_response(
+                200,
+                {"status": "complete", "auth_state": "ready", "error_code": None, "file_path": "/tmp/paper.pdf"},
+            ),
         ) as post,
     ):
         assert client.is_available() is True
@@ -86,7 +89,10 @@ def test_download_preserves_domain_blocked_for_acquisition_fallback():
     # When: the bridge responds with its DOMAIN_BLOCKED contract error.
     with patch(
         "zotero_mcp.acquisition.bridge_client.httpx.post",
-        return_value=_response(403, {"status": "failed", "error_code": "DOMAIN_BLOCKED", "auth_state": "ready"}),
+        return_value=_response(
+            403,
+            {"status": "failed", "error_code": "DOMAIN_BLOCKED", "auth_state": "ready", "file_path": None},
+        ),
     ):
         result = client.download(request)
 
@@ -102,7 +108,8 @@ def test_download_preserves_valid_auth_required_response():
     with patch(
         "zotero_mcp.acquisition.bridge_client.httpx.post",
         return_value=_response(
-            403, {"status": "auth_required", "auth_state": "expired", "error_code": "AUTH_REQUIRED"}
+            403,
+            {"status": "auth_required", "auth_state": "expired", "error_code": "AUTH_REQUIRED", "file_path": None},
         ),
     ):
         result = client.download(request)
@@ -196,7 +203,10 @@ def test_download_payload_derives_nested_candidate_domains_and_bounded_extras(mo
     # When: the request is serialized for the bridge.
     with patch(
         "zotero_mcp.acquisition.bridge_client.httpx.post",
-        return_value=_response(200, {"status": "complete", "auth_state": "ready"}),
+        return_value=_response(
+            200,
+            {"status": "complete", "auth_state": "ready", "error_code": None, "file_path": "/tmp/paper.pdf"},
+        ),
     ) as post:
         client.download(request)
 

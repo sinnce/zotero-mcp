@@ -13,20 +13,22 @@ _MAX_ALLOWED_DOMAINS = 32
 _MAX_DOMAIN_LENGTH = 253
 _MAX_NESTED_URL_DEPTH = 2
 BridgeStatus = Literal["complete", "failed", "auth_required"]
-BridgeAuthState = Literal["ready", "missing", "expired"]
-BridgeErrorCode = Literal[
-    "ACCESS_DENIED",
+BridgeAuthState = Literal["ready", "missing", "expired", "interactive_required"]
+BridgeWireErrorCode = Literal[
     "AUTH_REQUIRED",
-    "BRIDGE_UNAVAILABLE",
+    "CANCELLED",
+    "CAPTCHA",
     "DOMAIN_BLOCKED",
-    "HTML_LANDING",
+    "NO_PDF",
+]
+BridgeSyntheticErrorCode = Literal[
+    "BRIDGE_UNAVAILABLE",
     "TIMEOUT",
 ]
+BridgeErrorCode = BridgeWireErrorCode | BridgeSyntheticErrorCode
 _VALID_STATUSES: Final[frozenset[str]] = frozenset({"complete", "failed", "auth_required"})
-_VALID_AUTH_STATES: Final[frozenset[str]] = frozenset({"ready", "missing", "expired"})
-_VALID_ERROR_CODES: Final[frozenset[str]] = frozenset(
-    {"ACCESS_DENIED", "AUTH_REQUIRED", "BRIDGE_UNAVAILABLE", "DOMAIN_BLOCKED", "HTML_LANDING", "TIMEOUT"}
-)
+_AUTH_REQUIRED_STATES: Final[frozenset[str]] = frozenset({"missing", "expired", "interactive_required"})
+_FAILED_ERROR_CODES: Final[frozenset[str]] = frozenset({"DOMAIN_BLOCKED", "NO_PDF", "CAPTCHA", "CANCELLED"})
 _DOMAIN_PATTERN = re.compile(
     r"(?=.{1,253}\Z)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\Z"
 )
@@ -126,18 +128,26 @@ class BridgeClient:
         status = payload.get("status")
         auth_state = payload.get("auth_state")
         error_code = payload.get("error_code")
-        if status not in _VALID_STATUSES or auth_state not in _VALID_AUTH_STATES:
+        if status not in _VALID_STATUSES:
             return None
         if status == "complete":
-            if error_code is not None:
+            if auth_state != "ready" or "error_code" not in payload or error_code is not None:
                 return None
             file_path = payload.get("file_path")
+            if not isinstance(file_path, str) or not file_path.strip():
+                return None
             return BridgeDownloadResult(
                 status=status,
                 auth_state=auth_state,
-                file_path=file_path if isinstance(file_path, str) else None,
+                file_path=file_path,
             )
-        if error_code not in _VALID_ERROR_CODES:
+        if "file_path" not in payload or payload.get("file_path") is not None:
+            return None
+        if status == "auth_required":
+            if auth_state not in _AUTH_REQUIRED_STATES or error_code != "AUTH_REQUIRED":
+                return None
+            return BridgeDownloadResult(status=status, auth_state=auth_state, error_code=error_code)
+        if auth_state != "ready" or error_code not in _FAILED_ERROR_CODES:
             return None
         return BridgeDownloadResult(status=status, auth_state=auth_state, error_code=error_code)
 
