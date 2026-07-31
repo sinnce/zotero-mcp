@@ -1,7 +1,10 @@
-import pytest
 from unittest.mock import MagicMock, patch
+
+import pytest
+
+from zotero_mcp.acquisition.ingest import ingest_paper
+from zotero_mcp.acquisition.types import IngestResult
 from zotero_mcp.tools.ingest_paper_to_zotero import ingest_paper_to_zotero
-from zotero_mcp.acquisition.types import IngestResult, PipelineError, ProvenanceMetadata
 
 
 @pytest.fixture
@@ -37,6 +40,42 @@ def make_mock_zotero(item_key="TEST_KEY_123", has_duplicate=False):
 
 
 class TestIngestPaperToZotero:
+    @pytest.mark.parametrize(
+        ("authors", "expected_creators"),
+        [
+            (
+                [" Ada Lovelace ", "", "Grace Hopper"],
+                [
+                    {"creatorType": "author", "name": "Ada Lovelace"},
+                    {"creatorType": "author", "name": "Grace Hopper"},
+                ],
+            ),
+            (
+                " Ada Lovelace, , Grace Hopper ",
+                [
+                    {"creatorType": "author", "name": "Ada Lovelace"},
+                    {"creatorType": "author", "name": "Grace Hopper"},
+                ],
+            ),
+        ],
+        ids=["resolver_author_list", "manual_author_string"],
+    )
+    def test_normalizes_author_names_at_ingest_boundary(self, authors, expected_creators):
+        # Given: canonical resolver or manual-tool author metadata.
+        mock_zot = make_mock_zotero()
+
+        # When: the metadata is ingested.
+        result = ingest_paper(
+            write_zot=mock_zot,
+            read_zot=mock_zot,
+            title="Test Paper",
+            authors=authors,
+        )
+
+        # Then: Zotero receives ordered non-empty creator names.
+        assert isinstance(result, IngestResult)
+        assert mock_zot.create_items.call_args[0][0][0]["creators"] == expected_creators
+
     def test_no_write_client_returns_error(self, mock_ctx):
         with patch(
             "zotero_mcp.tools.ingest_paper_to_zotero._get_write_client", side_effect=ValueError("No web client")
