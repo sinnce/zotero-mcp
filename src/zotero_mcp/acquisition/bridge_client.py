@@ -1,9 +1,17 @@
 from __future__ import annotations
-import httpx
+
+import os
+import re
 from dataclasses import dataclass
-from typing import Optional
+from urllib.parse import parse_qsl, urlparse
+
+import httpx
 
 BRIDGE_SERVER_URL = "http://127.0.0.1:9870"
+_MAX_ALLOWED_DOMAINS = 32
+_MAX_DOMAIN_LENGTH = 253
+_MAX_NESTED_URL_DEPTH = 2
+_DOMAIN_PATTERN = re.compile(r"(?=.{1,253}\Z)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\Z")
 
 
 @dataclass
@@ -19,16 +27,90 @@ class BridgeDownloadRequest:
 class BridgeDownloadResult:
     status: str
     auth_state: str
-    file_path: Optional[str] = None
-    error_code: Optional[str] = None
-    message: Optional[str] = None
+    file_path: str | None = None
+    error_code: str | None = None
+    message: str | None = None
+
+
+def _normalize_domain(value: str) -> str | None:
+    domain = value.strip().lower().rstrip(".")
+    if len(domain) > _MAX_DOMAIN_LENGTH or not _DOMAIN_PATTERN.fullmatch(domain):
+        return None
+    return domain
+
+
+def _candidate_domains(candidate_url: str) -> list[str]:
+    domains: list[str] = []
+    pending = [(candidate_url, 0)]
+    while pending:
+        url, depth = pending.pop(0)
+        try:
+            parsed = urlparse(url)
+        except ValueError:
+            continue
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            continue
+        domain = _normalize_domain(parsed.hostname)
+        if domain and domain not in domains:
+            domains.append(domain)
+        if depth < _MAX_NESTED_URL_DEPTH:
+            pending.extend(
+                (value, depth + 1)
+                for key, value in parse_qsl(parsed.query, keep_blank_values=False)
+                if key.lower() == "url"
+            )
+    return domains
+
+
+def _allowed_domains(candidate_url: str, extra_domains: str) -> list[str]:
+    domains = _candidate_domains(candidate_url)
+    for value in extra_domains.split(","):
+        domain = _normalize_domain(value)
+        if domain and domain not in domains:
+            domains.append(domain)
+    return domains[:_MAX_ALLOWED_DOMAINS]
 
 
 class BridgeClient:
-    def __init__(self, base_url: str = BRIDGE_SERVER_URL):
-        self.base_url = base_url
+    def __init__(self, base_url: str = BRIDGE_SERVER_URL, auth_token: str | None = None):
+        self.base_url = base_url.rstrip("/")
+        self._auth_token = auth_token if auth_token is not None else os.environ.get("BRIDGE_AUTH_TOKEN", "")
+
+    def _headers(self) -> dict[str, str] | None:
+        if not self._auth_token:
+            return None
+        return {"Authorization": f"Bearer {self._auth_token}"}
+
+    def _unavailable_result(self) -> BridgeDownloadResult:
+        return BridgeDownloadResult(
+            status="failed",
+            auth_state="missing",
+            error_code="BRIDGE_UNAVAILABLE",
+            message="Bridge authentication is unavailable",
+        )
+
+    def _timeout_result(self) -> BridgeDownloadResult:
+        return BridgeDownloadResult(
+            status="failed",
+            auth_state="missing",
+            error_code="TIMEOUT",
+            message="Bridge request failed",
+        )
 
     def download(self, request: BridgeDownloadRequest) -> BridgeDownloadResult:
+        headers = self._headers()
+        if headers is None:
+            return self._unavailable_result()
+
+        allowed_domains = _allowed_domains(request.candidate_url, os.environ.get("BRIDGE_ALLOWED_DOMAINS", ""))
+        if not allowed_domains:
+            return BridgeDownloadResult(
+                status="failed",
+                auth_state="missing",
+                error_code="DOMAIN_BLOCKED",
+                message="Candidate URL has no allowed domain",
+            )
+
         try:
             resp = httpx.post(
                 f"{self.base_url}/bridge/download",
@@ -38,23 +120,49 @@ class BridgeClient:
                     "session_name": request.session_name,
                     "expected_artifact": request.expected_artifact,
                     "timeout_ms": request.timeout_ms,
+                    "allowed_domains": allowed_domains,
                 },
+                headers=headers,
                 timeout=request.timeout_ms / 1000 + 5,
             )
-            resp.raise_for_status()
-            data = resp.json()
-            return BridgeDownloadResult(**{k: data.get(k) for k in BridgeDownloadResult.__dataclass_fields__})
-        except Exception as e:
+        except httpx.HTTPError:
+            return self._timeout_result()
+
+        if resp.status_code == 401:
             return BridgeDownloadResult(
                 status="failed",
                 auth_state="missing",
-                error_code="TIMEOUT",
-                message=str(e),
+                error_code="AUTH_REQUIRED",
+                message="Bridge authentication was rejected",
+            )
+        if resp.status_code >= 400:
+            try:
+                error_data = resp.json()
+            except ValueError:
+                error_data = {}
+            if error_data.get("error_code") == "DOMAIN_BLOCKED":
+                return BridgeDownloadResult(
+                    status="failed",
+                    auth_state=error_data.get("auth_state", "missing"),
+                    error_code="DOMAIN_BLOCKED",
+                    message="Bridge rejected the candidate domain",
+                )
+            return BridgeDownloadResult(
+                status="failed",
+                auth_state="missing",
+                error_code="BRIDGE_UNAVAILABLE",
+                message="Bridge request failed",
             )
 
+        data = resp.json()
+        return BridgeDownloadResult(**{key: data.get(key) for key in BridgeDownloadResult.__dataclass_fields__})
+
     def is_available(self) -> bool:
-        try:
-            resp = httpx.get(f"{self.base_url}/bridge/health", timeout=2.0)
-            return resp.status_code == 200
-        except Exception:
+        headers = self._headers()
+        if headers is None:
             return False
+        try:
+            resp = httpx.get(f"{self.base_url}/bridge/health", headers=headers, timeout=2.0)
+        except httpx.HTTPError:
+            return False
+        return resp.status_code == 200
