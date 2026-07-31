@@ -15,20 +15,23 @@ _MAX_NESTED_URL_DEPTH = 2
 BridgeStatus = Literal["complete", "failed", "auth_required"]
 BridgeAuthState = Literal["ready", "missing", "expired", "interactive_required"]
 BridgeWireErrorCode = Literal[
+    "ACCESS_DENIED",
     "AUTH_REQUIRED",
     "CANCELLED",
     "CAPTCHA",
     "DOMAIN_BLOCKED",
+    "HTML_LANDING",
     "NO_PDF",
-]
-BridgeSyntheticErrorCode = Literal[
-    "BRIDGE_UNAVAILABLE",
     "TIMEOUT",
 ]
+BridgeSyntheticErrorCode = Literal["BRIDGE_UNAVAILABLE"]
 BridgeErrorCode = BridgeWireErrorCode | BridgeSyntheticErrorCode
 _VALID_STATUSES: Final[frozenset[str]] = frozenset({"complete", "failed", "auth_required"})
+_VALID_AUTH_STATES: Final[frozenset[str]] = frozenset({"ready", "expired", "missing", "interactive_required"})
 _AUTH_REQUIRED_STATES: Final[frozenset[str]] = frozenset({"missing", "expired", "interactive_required"})
-_FAILED_ERROR_CODES: Final[frozenset[str]] = frozenset({"DOMAIN_BLOCKED", "NO_PDF", "CAPTCHA", "CANCELLED"})
+_FAILED_ERROR_CODES: Final[frozenset[str]] = frozenset(
+    {"HTML_LANDING", "NO_PDF", "ACCESS_DENIED", "CAPTCHA", "TIMEOUT", "DOMAIN_BLOCKED", "CANCELLED"}
+)
 _DOMAIN_PATTERN = re.compile(
     r"(?=.{1,253}\Z)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\Z"
 )
@@ -141,13 +144,13 @@ class BridgeClient:
                 auth_state=auth_state,
                 file_path=file_path,
             )
-        if "file_path" not in payload or payload.get("file_path") is not None:
+        if "file_path" in payload and payload["file_path"] is not None:
             return None
         if status == "auth_required":
             if auth_state not in _AUTH_REQUIRED_STATES or error_code != "AUTH_REQUIRED":
                 return None
             return BridgeDownloadResult(status=status, auth_state=auth_state, error_code=error_code)
-        if auth_state != "ready" or error_code not in _FAILED_ERROR_CODES:
+        if auth_state not in _VALID_AUTH_STATES or error_code not in _FAILED_ERROR_CODES:
             return None
         return BridgeDownloadResult(status=status, auth_state=auth_state, error_code=error_code)
 
@@ -202,4 +205,18 @@ class BridgeClient:
             resp = httpx.get(f"{self.base_url}/bridge/health", headers=headers, timeout=2.0)
         except httpx.HTTPError:
             return False
-        return resp.status_code == 200
+        if resp.status_code != 200 or not resp.headers.get("content-type", "").lower().startswith("application/json"):
+            return False
+        try:
+            payload = resp.json()
+        except ValueError:
+            return False
+        if not isinstance(payload, dict):
+            return False
+        port = payload.get("port")
+        return (
+            payload.get("status") == "ok"
+            and isinstance(port, int)
+            and not isinstance(port, bool)
+            and 1 <= port <= 65535
+        )

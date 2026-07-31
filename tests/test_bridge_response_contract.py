@@ -16,23 +16,56 @@ def _download(payload):
         return client.download(request)
 
 
-@pytest.mark.parametrize("auth_state", ["missing", "expired", "interactive_required"])
-def test_download_accepts_all_auth_required_states(auth_state):
-    result = _download(
-        {"status": "auth_required", "auth_state": auth_state, "error_code": "AUTH_REQUIRED", "file_path": None}
-    )
+@pytest.mark.parametrize(
+    ("payload", "status", "auth_state", "error_code"),
+    [
+        (
+            {"status": "auth_required", "auth_state": "missing", "error_code": "AUTH_REQUIRED"},
+            "auth_required",
+            "missing",
+            "AUTH_REQUIRED",
+        ),
+        (
+            {"status": "auth_required", "auth_state": "expired", "error_code": "AUTH_REQUIRED"},
+            "auth_required",
+            "expired",
+            "AUTH_REQUIRED",
+        ),
+        (
+            {"status": "failed", "auth_state": "missing", "error_code": "DOMAIN_BLOCKED"},
+            "failed",
+            "missing",
+            "DOMAIN_BLOCKED",
+        ),
+        (
+            {"status": "failed", "auth_state": "ready", "error_code": "DOMAIN_BLOCKED"},
+            "failed",
+            "ready",
+            "DOMAIN_BLOCKED",
+        ),
+        (
+            {"status": "failed", "auth_state": "interactive_required", "error_code": "CAPTCHA"},
+            "failed",
+            "interactive_required",
+            "CAPTCHA",
+        ),
+        ({"status": "failed", "auth_state": "ready", "error_code": "HTML_LANDING"}, "failed", "ready", "HTML_LANDING"),
+        (
+            {"status": "failed", "auth_state": "ready", "error_code": "ACCESS_DENIED"},
+            "failed",
+            "ready",
+            "ACCESS_DENIED",
+        ),
+        ({"status": "failed", "auth_state": "ready", "error_code": "TIMEOUT"}, "failed", "ready", "TIMEOUT"),
+        ({"status": "failed", "auth_state": "ready", "error_code": "CANCELLED"}, "failed", "ready", "CANCELLED"),
+        ({"status": "failed", "auth_state": "ready", "error_code": "NO_PDF"}, "failed", "ready", "NO_PDF"),
+    ],
+)
+def test_download_accepts_type_script_producer_responses(payload, status, auth_state, error_code):
+    result = _download(payload)
 
-    assert result.status == "auth_required"
+    assert result.status == status
     assert result.auth_state == auth_state
-    assert result.error_code == "AUTH_REQUIRED"
-
-
-@pytest.mark.parametrize("error_code", ["DOMAIN_BLOCKED", "NO_PDF", "CAPTCHA", "CANCELLED"])
-def test_download_accepts_all_terminal_failed_codes(error_code):
-    result = _download({"status": "failed", "auth_state": "ready", "error_code": error_code, "file_path": None})
-
-    assert result.status == "failed"
-    assert result.auth_state == "ready"
     assert result.error_code == error_code
 
 
@@ -59,17 +92,15 @@ def test_download_rejects_incomplete_complete_response(payload):
     "payload",
     [
         {"status": "complete", "auth_state": "expired", "error_code": None, "file_path": "/tmp/paper.pdf"},
-        {"status": "auth_required", "auth_state": "ready", "error_code": "AUTH_REQUIRED", "file_path": None},
-        {"status": "auth_required", "auth_state": "interactive_required", "error_code": "CAPTCHA", "file_path": None},
-        {"status": "auth_required", "auth_state": "expired", "error_code": "AUTH_REQUIRED"},
+        {"status": "auth_required", "auth_state": "ready", "error_code": "AUTH_REQUIRED"},
+        {"status": "auth_required", "auth_state": "interactive_required", "error_code": "CAPTCHA"},
         {
             "status": "auth_required",
             "auth_state": "expired",
             "error_code": "AUTH_REQUIRED",
             "file_path": "/tmp/paper.pdf",
         },
-        {"status": "failed", "auth_state": "expired", "error_code": "NO_PDF", "file_path": None},
-        {"status": "failed", "auth_state": "ready", "error_code": "AUTH_REQUIRED", "file_path": None},
+        {"status": "failed", "auth_state": "ready", "error_code": "AUTH_REQUIRED"},
         {"status": "failed", "auth_state": "ready", "error_code": "NO_PDF", "file_path": "/tmp/paper.pdf"},
     ],
 )

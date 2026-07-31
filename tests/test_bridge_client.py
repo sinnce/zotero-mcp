@@ -16,6 +16,14 @@ def _response(status_code: int, payload: dict[str, str] | None = None) -> Mock:
     return response
 
 
+def _health_response(payload, content_type: str = "application/json", status_code: int = 200) -> Mock:
+    response = Mock()
+    response.status_code = status_code
+    response.headers = {"content-type": content_type}
+    response.json.return_value = payload
+    return response
+
+
 def test_missing_token_fails_closed_without_http_request(monkeypatch):
     # Given: bridge authentication is not configured.
     monkeypatch.delenv("BRIDGE_AUTH_TOKEN", raising=False)
@@ -46,7 +54,10 @@ def test_health_and_download_use_identical_bearer_auth_headers():
 
     # When: the client probes health and downloads.
     with (
-        patch("zotero_mcp.acquisition.bridge_client.httpx.get", return_value=_response(200)) as get,
+        patch(
+            "zotero_mcp.acquisition.bridge_client.httpx.get",
+            return_value=_health_response({"status": "ok", "port": 9870}),
+        ) as get,
         patch(
             "zotero_mcp.acquisition.bridge_client.httpx.post",
             return_value=_response(
@@ -63,6 +74,39 @@ def test_health_and_download_use_identical_bearer_auth_headers():
     assert result.auth_state == "ready"
     assert get.call_args.kwargs["headers"] == {"Authorization": f"Bearer {token}"}
     assert post.call_args.kwargs["headers"] == {"Authorization": f"Bearer {token}"}
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        _health_response([]),
+        _health_response({}),
+        _health_response({"status": "degraded", "port": 9870}),
+        _health_response({"status": "ok", "port": 0}),
+        _health_response({"status": "ok", "port": 65536}),
+        _health_response({"status": "ok", "port": "9870"}),
+        _health_response({"status": "ok", "port": True}),
+        _health_response({"status": "ok", "port": 9870}, content_type="text/plain"),
+    ],
+)
+def test_health_fails_closed_for_invalid_application_payload(response):
+    client = BridgeClient(auth_token="test-token-that-is-long-enough-for-the-contract")
+
+    with patch("zotero_mcp.acquisition.bridge_client.httpx.get", return_value=response):
+        available = client.is_available()
+
+    assert available is False
+
+
+def test_health_fails_closed_for_malformed_json():
+    response = _health_response({"status": "ok", "port": 9870})
+    response.json.side_effect = ValueError("malformed JSON")
+    client = BridgeClient(auth_token="test-token-that-is-long-enough-for-the-contract")
+
+    with patch("zotero_mcp.acquisition.bridge_client.httpx.get", return_value=response):
+        available = client.is_available()
+
+    assert available is False
 
 
 def test_download_maps_unauthorized_without_exposing_token():
