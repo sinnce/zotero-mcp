@@ -200,12 +200,52 @@ When `resolve_paper_access` receives a URL, the resolver first checks whether tr
 
 Institutional access is decided by `zotero-mcp`, but browser automation is delegated to the bridge server in `packages/opencode-deep-research`.
 
+#### Operator setup for authenticated bridge calls
+
+The bridge now expects authenticated caller requests. Set the token on both the `zotero-mcp` side and the bridge-server side, and keep the value private.
+
+```bash
+# caller side, where zotero-mcp runs
+export BRIDGE_AUTH_TOKEN=<generate-a-random-32+-character-token>
+export BRIDGE_ALLOWED_DOMAINS=publisher.example,cdn.publisher.example
+
+# bridge server side, must match the caller token exactly
+export BRIDGE_AUTH_TOKEN=<generate-a-random-32+-character-token>
+```
+
+What to keep in mind:
+
+- `BRIDGE_AUTH_TOKEN` must be the same on both sides and should be at least 32 characters long.
+- Store it in a private env file, secret manager, or service definition, not in committed config or shared screenshots.
+- Missing caller `BRIDGE_AUTH_TOKEN` disables bridge calls. `acquire_paper` then stays on the normal direct-download path.
+- `BRIDGE_ALLOWED_DOMAINS` is required for bridge requests and should contain only operator-approved extra hostnames.
+
+#### Caller-first rollout
+
+Roll this out from the caller side first.
+
+1. Set `BRIDGE_AUTH_TOKEN` and `BRIDGE_ALLOWED_DOMAINS` where `zotero-mcp` runs.
+2. Confirm normal acquisition still works when no bridge session is used.
+3. Set the same `BRIDGE_AUTH_TOKEN` on the bridge server.
+4. Start using `session_name` for institutional downloads.
+
+This order keeps the browser bridge opt-in while the new auth requirement is being deployed.
+
+#### Allowed-domain behavior
+
+Every bridge call now carries an explicit allowed-domain set.
+
+- The caller derives hosts from the requested `candidate_url`.
+- For LibProxy and other nested redirect URLs, the caller also derives hosts from nested targets, such as the proxied `url=` destination.
+- `BRIDGE_ALLOWED_DOMAINS` adds normalized operator-managed extras for known publisher CDNs or secondary download hosts.
+- Redirects never auto-expand trust. If a later hop lands on a host outside the derived or explicit allowlist, the bridge rejects it.
+
 The source-level flow is:
 
 1. `resolve_paper_access` normalizes the input and resolves public locations through Unpaywall, Semantic Scholar, PMC OA, arXiv, URL translators, and optional institutional access.
 2. Institutional LibProxy locations are marked with `requires_session=true` and `session_kind="libproxy"`.
-3. `acquire_paper(identifier, session_name="libproxy-snu")` checks `http://127.0.0.1:9870/bridge/health`.
-4. If the bridge is available, it sends `POST /bridge/download` with `doi`, `candidate_url`, and `session_name`.
+3. `acquire_paper(identifier, session_name="libproxy-snu")` checks `http://127.0.0.1:9870/bridge/health` and sends bearer auth on that request when `BRIDGE_AUTH_TOKEN` is configured.
+4. If the bridge is available and the caller has a token, it sends `POST /bridge/download` with `doi`, `candidate_url`, `session_name`, and the required allowed-domain list.
 5. If the bridge succeeds, the returned provenance includes `bridge_session`; otherwise `acquire_paper` falls back to the standard HTTP download path.
 
 The bridge does not automate campus login. Start and authenticate the named Pinchtab browser session before calling `acquire_paper` with `session_name`.

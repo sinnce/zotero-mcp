@@ -177,6 +177,8 @@ The ownership split is:
 - `zotero-mcp`: resolve access and decide whether a session-backed location should be used
 - `opencode-deep-research`: keep the named browser session alive and perform the download
 
+Bridge auth is now fail-closed. The caller must send both a bearer token and an explicit allowed-domain list on bridge health and download requests. If `BRIDGE_AUTH_TOKEN` is missing on the caller side, `zotero-mcp` skips bridge calls and stays on the standard direct-download path.
+
 ## 🧠 Semantic Search
 
 Zotero MCP now includes powerful AI-powered semantic search capabilities that let you find research based on concepts and meaning, not just keywords.
@@ -512,11 +514,42 @@ LibProxy redirects via query parameter (`?url=...`) and requires an authenticate
 
 Some papers resolve to URLs that need an authenticated browser session, such as a campus proxy login. When `resolve_paper_access` returns a location with `requires_session: true`, `acquire_paper` can route the download through the deep-research bridge server instead of a plain HTTP fetch.
 
+#### Operator bridge setup
+
+Configure matching bridge auth on both sides before expecting institutional browser downloads to work:
+
+```bash
+# caller environment, for example the MCP client or service manager that starts zotero-mcp
+export BRIDGE_AUTH_TOKEN=<generate-a-random-32+-character-token>
+export BRIDGE_ALLOWED_DOMAINS=publisher.example,cdn.publisher.example
+
+# bridge server environment, must use the same token value
+export BRIDGE_AUTH_TOKEN=<generate-a-random-32+-character-token>
+```
+
+Operator notes:
+
+- `BRIDGE_AUTH_TOKEN` must match on the caller and the bridge server.
+- Use a private secret store, service manager secret field, or local env file that is not committed. Do not put the token in docs, screenshots, shell history snippets, or tracked config.
+- Generate a token that is at least 32 characters long. The placeholder above is the only value that should appear in documentation.
+- `BRIDGE_ALLOWED_DOMAINS` is caller-side policy. It is required for bridge requests and should list only the extra operator-approved domains you want to allow.
+- Missing `BRIDGE_AUTH_TOKEN` on the caller disables bridge calls by design. That gives you a caller-first rollout path because direct HTTP acquisition still runs while the bridge remains opt-in.
+
+#### Allowed-domain behavior
+
+The caller now sends an explicit allowed-domain set with every bridge request. The bridge does not auto-trust arbitrary redirects.
+
+- Candidate hosts are derived from the requested `candidate_url`.
+- For LibProxy and similar nested redirectors, hosts are also derived from nested target URLs such as the `url=` value inside the proxy URL.
+- `BRIDGE_ALLOWED_DOMAINS` adds operator-managed extra domains after hostname normalization. Use it for known publisher CDN hosts or stable secondary download hosts that are not always visible in the initial URL.
+- Redirects never expand trust automatically. If a redirected host is not in the derived or operator-approved set, the bridge rejects it instead of following it.
+- Keep this list tight. Add only the domains you intend to trust for downloads.
+
 **How it works:**
 
 1. `acquire_paper` calls `resolve_paper_access` to find the best URL for the identifier.
-2. If the resolved location requires a session and you pass `session_name`, it checks whether the bridge server is running at `http://127.0.0.1:9870`.
-3. If the bridge is available, it sends a `POST /bridge/download` request with the DOI, candidate URL, and session name. The bridge server handles navigation and PDF download inside the named browser session.
+2. If the resolved location requires a session and you pass `session_name`, it checks whether the bridge server is running at `http://127.0.0.1:9870` and sends bearer auth on that health check when `BRIDGE_AUTH_TOKEN` is configured.
+3. If the bridge is available and the caller has a token, it sends a `POST /bridge/download` request with the DOI, candidate URL, session name, and required allowed-domain set. The bridge server handles navigation and PDF download inside the named browser session.
 4. If the bridge is unavailable or `session_name` is omitted, acquisition falls back to the standard HTTP download path. Nothing breaks; you just won't get paywalled PDFs.
 
 For LibProxy, `acquire_paper` has one extra source-backed behavior: if the DOI resolved to a LibProxy URL and you provided `session_name`, it first tries direct browser navigation to `https://doi.org/{doi}` through the browser session. If that still lands on an explicit paywall, it retries through the proxied institutional URL.
@@ -555,6 +588,8 @@ When the input to `resolve_paper_access` is a URL, the resolver first checks whe
 | Download endpoint | `POST /bridge/download` |
 | Health check | `GET /bridge/health` |
 | Session identifier | `session_name` string (e.g. `"libproxy-snu"`) |
+| Caller auth env | `BRIDGE_AUTH_TOKEN`, same value as the bridge server |
+| Caller allowlist env | `BRIDGE_ALLOWED_DOMAINS`, comma-separated normalized extra hosts |
 
 ### Development Setup (Dev Checkout)
 
