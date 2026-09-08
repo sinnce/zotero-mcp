@@ -8,16 +8,24 @@ for semantic search over Zotero libraries.
 import json
 import logging
 import os
+import time
+from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 import chromadb
 from chromadb import Documents, EmbeddingFunction, Embeddings
 from chromadb.config import Settings
 
+from zotero_mcp._version import __version__
 from zotero_mcp.config_paths import get_chroma_db_path
 from zotero_mcp.utils import suppress_stdout
 
 logger = logging.getLogger(__name__)
+GEMINI_DIRECT_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta"
+OPENROUTER_EMBEDDING_ENDPOINT = "https://openrouter.ai/api/v1/embeddings"
+EMBEDDING_DESCRIPTOR_SCHEMA_VERSION = "zotero-mcp-embedding-descriptor/1.0.0"
+ISOLATED_3072_MODELS = frozenset({"gemini-embedding-001", "gemini-embedding-2-preview"})
 
 
 class OpenAIEmbeddingFunction(EmbeddingFunction):
@@ -155,6 +163,218 @@ class GeminiEmbeddingFunction(EmbeddingFunction):
         if len(text) > max_chars:
             text = text[:max_chars]
         return text
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedEmbedding:
+    """Route-pinned embedding settings for an isolated 3072-d build."""
+
+    provider: str
+    route: str
+    model_name: str
+    endpoint: str
+    task_type: str = "RETRIEVAL_DOCUMENT"
+    dimension: int = 3072
+    producer: str = "zotero-mcp"
+    producer_version: str = __version__
+    descriptor_schema_version: str = EMBEDDING_DESCRIPTOR_SCHEMA_VERSION
+    api_key: str = field(default="", repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        if self.model_name not in ISOLATED_3072_MODELS:
+            raise ValueError(f"isolated embedding model cannot promise 3072 dimensions: {self.model_name}")
+        object.__setattr__(self, "endpoint", _sanitize_endpoint(self.endpoint))
+
+    def public_descriptor(self) -> dict[str, Any]:
+        return {
+            "provider": self.provider,
+            "route": self.route,
+            "model_name": self.model_name,
+            "endpoint": self.endpoint,
+            "task_type": self.task_type,
+            "dimension": self.dimension,
+            "producer": self.producer,
+            "producer_version": self.producer_version,
+            "descriptor_schema_version": self.descriptor_schema_version,
+        }
+
+
+class PinnedGemini3072EmbeddingFunction(EmbeddingFunction):
+    """Gemini document embeddings with one immutable route and no fallback."""
+
+    max_input_tokens = 2000
+    max_attempts = 3
+
+    def __init__(  # pyright: ignore[reportMissingSuperCall]
+        self,
+        model_name: str,
+        api_key: str | None = None,
+        *,
+        route: str = "gemini-direct",
+        endpoint: str = GEMINI_DIRECT_ENDPOINT,
+        task_type: str = "RETRIEVAL_DOCUMENT",
+        dimension: int = 3072,
+        producer: str = "zotero-mcp",
+        producer_version: str = __version__,
+        descriptor_schema_version: str = EMBEDDING_DESCRIPTOR_SCHEMA_VERSION,
+    ) -> None:
+        if route != "gemini-direct":
+            raise ValueError(f"unsupported isolated embedding route: {route}")
+        if model_name not in ISOLATED_3072_MODELS:
+            raise ValueError(f"isolated embedding model cannot promise 3072 dimensions: {model_name}")
+        if task_type != "RETRIEVAL_DOCUMENT":
+            raise ValueError("isolated build task type must be RETRIEVAL_DOCUMENT")
+        if dimension != 3072:
+            raise ValueError("isolated build dimension must be 3072")
+        self.model_name = model_name
+        self.route = route
+        self.endpoint = _sanitize_endpoint(endpoint)
+        self.task_type = task_type
+        self.dimension = dimension
+        self.producer = producer
+        self.producer_version = producer_version
+        self.descriptor_schema_version = descriptor_schema_version
+        self.api_key = api_key or os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+        if not self.api_key:
+            raise ValueError(f"API key is required for isolated route {route}")
+
+        try:
+            from google import genai  # pyright: ignore[reportMissingTypeStubs, reportAttributeAccessIssue]
+            from google.genai import types  # pyright: ignore[reportMissingImports]
+        except ImportError as exc:
+            raise ImportError("google-genai package is required for Gemini embeddings") from exc
+        if self.endpoint == GEMINI_DIRECT_ENDPOINT:
+            self.client = genai.Client(api_key=self.api_key)
+        else:
+            http_options = types.HttpOptions(baseUrl=self.endpoint)
+            self.client = genai.Client(api_key=self.api_key, http_options=http_options)
+        self.types = types
+
+    @staticmethod
+    def name() -> str:
+        return "zotero_mcp_pinned_gemini_3072"
+
+    def get_config(self) -> dict[str, Any]:
+        return {
+            "provider": "gemini",
+            "route": self.route,
+            "model_name": self.model_name,
+            "endpoint": self.endpoint,
+            "task_type": self.task_type,
+            "dimension": self.dimension,
+            "producer": self.producer,
+            "producer_version": self.producer_version,
+            "descriptor_schema_version": self.descriptor_schema_version,
+        }
+
+    @staticmethod
+    def build_from_config(config: dict[str, Any]) -> "PinnedGemini3072EmbeddingFunction":
+        return PinnedGemini3072EmbeddingFunction(
+            model_name=config["model_name"],
+            route=config["route"],
+            endpoint=config["endpoint"],
+            task_type=config["task_type"],
+            dimension=config["dimension"],
+            producer=config["producer"],
+            producer_version=config["producer_version"],
+            descriptor_schema_version=config["descriptor_schema_version"],
+        )
+
+    def __call__(self, input: Documents) -> Embeddings:
+        texts = list(input)
+        result: list[list[float]] = []
+        for start in range(0, len(texts), 100):
+            chunk = texts[start:start + 100]
+            response: Any | None = None
+            for attempt in range(self.max_attempts):
+                try:
+                    response = self.client.models.embed_content(
+                        model=self.model_name,
+                        contents=chunk,
+                        config=self.types.EmbedContentConfig(
+                            task_type="retrieval_document",
+                            title="Zotero library document",
+                            output_dimensionality=self.dimension,
+                        ),
+                    )
+                    break
+                except Exception as exc:
+                    if attempt + 1 >= self.max_attempts or not self._is_transient_error(exc):
+                        raise
+                    time.sleep(2**attempt)
+            if response is None:
+                raise RuntimeError("Gemini embedding request exhausted without a response")
+            result.extend([item.values for item in response.embeddings])
+        return result
+
+    @staticmethod
+    def _is_transient_error(exc: Exception) -> bool:
+        detail = str(exc).upper()
+        return any(
+            marker in detail
+            for marker in ("429", "500", "502", "503", "504", "RESOURCE_EXHAUSTED", "UNAVAILABLE", "DEADLINE_EXCEEDED")
+        )
+
+def resolve_isolated_embedding(config_path: str | None = None) -> ResolvedEmbedding:
+    """Resolve one explicit Gemini route before collection or network access."""
+
+    config = _load_chroma_config(config_path)
+    if config["embedding_model"] != "gemini":
+        raise ValueError("isolated recovery currently requires the Gemini 3072 provider")
+    details = config["embedding_config"]
+    model_name = details.get("model_name", "gemini-embedding-001")
+    route = details.get("isolated_route") or os.getenv("ZOTERO_ISOLATED_EMBEDDING_ROUTE")
+    direct_key = details.get("api_key") or os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+    if route is None:
+        route = "gemini-direct" if direct_key else None
+    if route == "gemini-direct":
+        endpoint = details.get("base_url") or os.getenv("GEMINI_BASE_URL") or (
+            GEMINI_DIRECT_ENDPOINT
+        )
+        api_key = direct_key
+    else:
+        raise ValueError("isolated recovery supports only the gemini-direct embedding route")
+    if not isinstance(model_name, str) or not model_name.strip():
+        raise ValueError("isolated embedding model is unknown")
+    if model_name not in ISOLATED_3072_MODELS:
+        raise ValueError(f"isolated embedding model cannot promise 3072 dimensions: {model_name}")
+    if not api_key:
+        raise ValueError(f"API key is required for isolated route {route}")
+    return ResolvedEmbedding(
+        provider="gemini",
+        route=route,
+        model_name=model_name,
+        endpoint=_sanitize_endpoint(endpoint),
+        api_key=api_key,
+    )
+
+
+def create_pinned_embedding_function(resolved: ResolvedEmbedding) -> PinnedGemini3072EmbeddingFunction:
+    return PinnedGemini3072EmbeddingFunction(
+        model_name=resolved.model_name,
+        api_key=resolved.api_key,
+        route=resolved.route,
+        endpoint=resolved.endpoint,
+        task_type=resolved.task_type,
+        dimension=resolved.dimension,
+        producer=resolved.producer,
+        producer_version=resolved.producer_version,
+        descriptor_schema_version=resolved.descriptor_schema_version,
+    )
+
+
+def _sanitize_endpoint(value: str) -> str:
+    parsed = urlsplit(value)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise ValueError("embedding endpoint must be an absolute HTTP(S) URL")
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError("embedding endpoint must not contain credentials")
+    host = parsed.hostname
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    if parsed.port is not None:
+        host = f"{host}:{parsed.port}"
+    return urlunsplit((parsed.scheme.lower(), host, parsed.path or "/", "", ""))
 
 
 class HuggingFaceEmbeddingFunction(EmbeddingFunction):
@@ -532,16 +752,9 @@ class ChromaClient:
             return set()
 
 
-def create_chroma_client(config_path: str | None = None) -> ChromaClient:
-    """
-    Create a ChromaClient instance from configuration.
+def _load_chroma_config(config_path: str | None = None) -> dict[str, Any]:
+    """Load the existing Chroma configuration precedence without side effects."""
 
-    Args:
-        config_path: Path to configuration file
-
-    Returns:
-        Configured ChromaClient instance
-    """
     # Default configuration
     config = {"collection_name": "zotero_library", "embedding_model": "default", "embedding_config": {}}
 
@@ -577,6 +790,21 @@ def create_chroma_client(config_path: str | None = None) -> ChromaClient:
             config["embedding_config"] = {"api_key": gemini_api_key, "model_name": gemini_model}
             if gemini_base_url:
                 config["embedding_config"]["base_url"] = gemini_base_url
+
+    return config
+
+
+def create_chroma_client(config_path: str | None = None) -> ChromaClient:
+    """
+    Create a ChromaClient instance from configuration.
+
+    Args:
+        config_path: Path to configuration file
+
+    Returns:
+        Configured ChromaClient instance
+    """
+    config = _load_chroma_config(config_path)
 
     return ChromaClient(
         collection_name=config["collection_name"],

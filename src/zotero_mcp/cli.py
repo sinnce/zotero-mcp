@@ -10,7 +10,15 @@ import subprocess
 import sys
 from pathlib import Path
 
-from zotero_mcp.config_paths import get_config_path
+from zotero_mcp.config_paths import get_chroma_db_path, get_config_home, get_config_path
+
+ZOTERO_SOURCE_ENV = (
+    "ZOTERO_LOCAL",
+    "ZOTERO_LOCAL_PORT",
+    "ZOTERO_LIBRARY_ID",
+    "ZOTERO_LIBRARY_TYPE",
+    "ZOTERO_API_KEY",
+)
 
 # NOTE: Do NOT import zotero_mcp.server at module level.
 # That triggers heavy imports (FastMCP, ChromaDB, sentence-transformers, torch)
@@ -68,10 +76,10 @@ def load_claude_desktop_env_vars():
         return {}
 
 
-def load_standalone_env_vars():
+def load_standalone_env_vars(config_path: Path | None = None):
     """Load environment variables from standalone config (~/.config/zotero-mcp/config.json)."""
     try:
-        cfg_path = get_config_path()
+        cfg_path = config_path or get_config_path()
         if not cfg_path.exists():
             return {}
         with open(cfg_path) as f:
@@ -129,8 +137,47 @@ def _save_zotero_db_path_to_config(config_path: Path, db_path: str) -> None:
         print(f"Warning: Could not save db_path to config: {e}")
 
 
-def setup_zotero_environment():
+def setup_zotero_environment(config_path: Path | None = None, *, strict_source: bool = False):
     """Setup Zotero environment for CLI commands."""
+    if strict_source:
+        if config_path is None:
+            raise ValueError("an explicit config path is required for isolated source selection")
+        source_env = load_standalone_env_vars(config_path)
+        if not isinstance(source_env, dict):
+            raise ValueError("explicit config client_env must be an object")
+        required = ZOTERO_SOURCE_ENV[:4]
+        missing = [key for key in required if key not in source_env or not str(source_env[key]).strip()]
+        if missing:
+            raise ValueError("explicit config must pin Zotero source variables: " + ", ".join(missing))
+        local_mode = str(source_env["ZOTERO_LOCAL"]).strip().lower()
+        if local_mode not in {"true", "false"}:
+            raise ValueError("explicit config ZOTERO_LOCAL must be exactly true or false")
+        library_type = str(source_env["ZOTERO_LIBRARY_TYPE"]).strip().lower()
+        if library_type not in {"user", "group"}:
+            raise ValueError("explicit config ZOTERO_LIBRARY_TYPE must be user or group")
+        try:
+            local_port = int(str(source_env["ZOTERO_LOCAL_PORT"]).strip())
+        except ValueError as exc:
+            raise ValueError("explicit config ZOTERO_LOCAL_PORT must be an integer") from exc
+        if not 1 <= local_port <= 65535:
+            raise ValueError("explicit config ZOTERO_LOCAL_PORT must be between 1 and 65535")
+        if local_mode == "false" and not str(source_env.get("ZOTERO_API_KEY", "")).strip():
+            raise ValueError("explicit web API config must include ZOTERO_API_KEY")
+        source_env = dict(source_env)
+        source_env["ZOTERO_LOCAL"] = local_mode
+        source_env["ZOTERO_LOCAL_PORT"] = str(local_port)
+        source_env["ZOTERO_LIBRARY_ID"] = str(source_env["ZOTERO_LIBRARY_ID"]).strip()
+        source_env["ZOTERO_LIBRARY_TYPE"] = library_type
+        for key in ZOTERO_SOURCE_ENV:
+            os.environ.pop(key, None)
+        apply_environment_variables({key: value for key, value in source_env.items() if key not in ZOTERO_SOURCE_ENV})
+        for key in ZOTERO_SOURCE_ENV:
+            if key in source_env and str(source_env[key]).strip():
+                os.environ[key] = str(source_env[key])
+        from zotero_mcp.client import clear_active_library
+
+        clear_active_library()
+        return
     # Load standalone env first so global flags (e.g., ZOTERO_NO_CLAUDE) take effect
     standalone_env_vars = load_standalone_env_vars()
     apply_environment_variables(standalone_env_vars)
@@ -152,6 +199,48 @@ def setup_zotero_environment():
             "ZOTERO_LIBRARY_ID": "0",
         }
         apply_environment_variables(fallback_env_vars)
+
+
+def _recovery_protected_paths(config_path: Path) -> tuple[Path, ...]:
+    """Discover canonical real, development, explicit, and environment-selected paths."""
+
+    explicit = config_path.expanduser().resolve(strict=False)
+    config_home = get_config_home()
+    candidates = {
+        explicit,
+        explicit.parent / "chroma_db",
+        get_config_path().resolve(strict=False),
+        get_chroma_db_path().resolve(strict=False),
+        config_home / "zotero-mcp" / "config.json",
+        config_home / "zotero-mcp" / "chroma_db",
+        config_home / "zotero-mcp-dev" / "config.json",
+        config_home / "zotero-mcp-dev" / "chroma_db",
+    }
+    source_env = load_standalone_env_vars(explicit)
+    if isinstance(source_env, dict):
+        if source_env.get("ZOTERO_MCP_CONFIG_PATH"):
+            candidates.add(Path(str(source_env["ZOTERO_MCP_CONFIG_PATH"])).expanduser().resolve(strict=False))
+        if source_env.get("ZOTERO_MCP_CONFIG_DIR"):
+            directory = Path(str(source_env["ZOTERO_MCP_CONFIG_DIR"])).expanduser().resolve(strict=False)
+            candidates.update({directory / "config.json", directory / "chroma_db"})
+        if source_env.get("ZOTERO_MCP_CHROMA_DB_PATH"):
+            candidates.add(Path(str(source_env["ZOTERO_MCP_CHROMA_DB_PATH"])).expanduser().resolve(strict=False))
+    return tuple(sorted((path.resolve(strict=False) for path in candidates), key=str))
+
+
+def _validate_export_output(
+    output_path: str | Path,
+    config_path: Path,
+    index_path: str | Path,
+    protected_paths: tuple[Path, ...],
+) -> Path:
+    output = Path(output_path).expanduser().resolve(strict=False)
+    sealed_index = Path(index_path).expanduser().resolve(strict=False)
+    guarded = (*protected_paths, config_path.resolve(strict=False), sealed_index)
+    for protected in guarded:
+        if output == protected or output.is_relative_to(protected) or protected.is_relative_to(output):
+            raise ValueError(f"snapshot output overlaps protected path: {protected}")
+    return output
 
 
 def main():
@@ -230,6 +319,28 @@ def main():
     inspect_parser.add_argument("--show-documents", action="store_true", help="Show beginning of stored document text")
     inspect_parser.add_argument("--stats", action="store_true", help="Show aggregate stats (formerly db-stats)")
     inspect_parser.add_argument("--config-path", help="Path to semantic search configuration file")
+
+    snapshot_parser = subparsers.add_parser(
+        "export-snapshot",
+        help="Export a read-only snapshot from a sealed isolated index",
+    )
+    snapshot_parser.add_argument("--output", required=True, help="Atomic JSON output path")
+    snapshot_parser.add_argument("--config-path", help="Path to semantic search configuration file")
+    snapshot_parser.add_argument("--index-path", required=True, help="Sealed isolated Chroma index directory")
+
+    build_index_parser = subparsers.add_parser(
+        "build-index",
+        help="Build a fresh metadata-only 3072-d Chroma index without replacing an existing index",
+    )
+    build_index_parser.add_argument("--output", required=True, help="New isolated Chroma index directory")
+    build_index_parser.add_argument("--config-path", help="Path to semantic search configuration file")
+    build_index_parser.add_argument("--collection", default="zotero_library", help="New Chroma collection name")
+    build_index_parser.add_argument(
+        "--text-mode",
+        choices=["metadata-only"],
+        default="metadata-only",
+        help="Frozen text mode (only metadata-only is currently safe)",
+    )
 
     # Update command
     update_parser = subparsers.add_parser("update", help="Update zotero-mcp to the latest version")
@@ -576,6 +687,103 @@ def main():
         except Exception as e:
             print(f"Error inspecting database: {e}")
             sys.exit(1)
+
+    elif args.command == "build-index":
+        from zotero_mcp.chroma_client import resolve_isolated_embedding
+        from zotero_mcp.client import get_zotero_client
+        from zotero_mcp.index_build import IsolatedIndexBuildError, build_isolated_index
+
+        config_path = (Path(args.config_path) if args.config_path else get_config_path()).expanduser().resolve()
+        try:
+            protected_paths = _recovery_protected_paths(config_path)
+            setup_zotero_environment(config_path, strict_source=True)
+            resolved = resolve_isolated_embedding(str(config_path))
+            manifest = build_isolated_index(
+                get_zotero_client(),
+                resolved,
+                args.output,
+                collection_name=args.collection,
+                protected_paths=protected_paths,
+            )
+            print(
+                json.dumps(
+                    {
+                        "status": "complete",
+                        "output": str(Path(args.output).expanduser().resolve()),
+                        "index_identity": manifest["index_identity"],
+                        "counts": manifest["counts"],
+                        "embedding": resolved.public_descriptor(),
+                    },
+                    separators=(",", ":"),
+                    sort_keys=True,
+                )
+            )
+        except Exception as exc:
+            print(
+                json.dumps(
+                    {
+                        "status": "error",
+                        "code": getattr(exc, "code", IsolatedIndexBuildError.code),
+                        "message": str(exc),
+                    },
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ),
+                file=sys.stderr,
+            )
+            sys.exit(2)
+
+    elif args.command == "export-snapshot":
+        from zotero_mcp.snapshot_export import (
+            SnapshotExportError,
+            export_sealed_snapshot,
+            write_snapshot_atomic,
+        )
+
+        config_path = (Path(args.config_path) if args.config_path else get_config_path()).expanduser().resolve()
+        try:
+            protected_paths = _recovery_protected_paths(config_path)
+            output_path = _validate_export_output(
+                args.output,
+                config_path,
+                args.index_path,
+                protected_paths,
+            )
+            setup_zotero_environment(config_path, strict_source=True)
+            snapshot = export_sealed_snapshot(config_path, args.index_path)
+            papers = snapshot.get("papers")
+            embeddings = snapshot.get("embeddings")
+            if not isinstance(papers, list) or not isinstance(embeddings, list):
+                raise SnapshotExportError("sealed snapshot records are incomplete")
+            write_snapshot_atomic(snapshot, output_path)
+            print(
+                json.dumps(
+                    {
+                        "status": "exported",
+                        "output": str(output_path),
+                        "snapshot_id": snapshot["snapshot_id"],
+                        "snapshot_hash": snapshot["snapshot_hash"],
+                        "papers": len(papers),
+                        "embeddings": len(embeddings),
+                    },
+                    separators=(",", ":"),
+                    sort_keys=True,
+                )
+            )
+        except Exception as exc:
+            print(
+                json.dumps(
+                    {
+                        "status": "error",
+                        "code": getattr(exc, "code", SnapshotExportError.code),
+                        "message": str(exc),
+                    },
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ),
+                file=sys.stderr,
+            )
+            sys.exit(2)
 
     elif args.command == "update":
         from zotero_mcp.updater import update_zotero_mcp
