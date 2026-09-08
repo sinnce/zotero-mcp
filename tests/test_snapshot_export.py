@@ -218,6 +218,21 @@ def test_snapshot_hash_is_stable_across_retrieval_times():
     assert first["metadata"]["retrieved_at"] != second["metadata"]["retrieved_at"]
 
 
+def test_snapshot_hash_binds_sealed_build_metadata():
+    first = _export(
+        FakeZotero([_item("A")]),
+        FakeCollection([_record("A")]),
+        sealed_build={"index_identity": {"index_uuid": "first"}},
+    )
+    second = _export(
+        FakeZotero([_item("A")]),
+        FakeCollection([_record("A")]),
+        sealed_build={"index_identity": {"index_uuid": "second"}},
+    )
+
+    assert first["snapshot_hash"] != second["snapshot_hash"]
+
+
 def test_rejects_untruthful_or_incompatible_provenance():
     with pytest.raises(SnapshotProvenanceError, match="dimension"):
         export_snapshot(

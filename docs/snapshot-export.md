@@ -2,7 +2,7 @@
 
 `export-snapshot` emits the complete producer handoff consumed by Paper
 Graph's fresh canonical storage builder. It reads the configured Zotero
-library and existing Chroma collection. It does not update Zotero, create a
+library and an explicitly selected sealed Chroma index. It does not update Zotero, create a
 collection, initialize an embedding function, re-embed text, or fill missing
 vectors. The Chroma API opens a temporary content-fingerprinted clone because
 even read calls can update Chroma files. Schema migrations are validation-only
@@ -11,19 +11,20 @@ on that clone; the source index is fingerprinted again before export succeeds.
 ```bash
 zotero-mcp export-snapshot \
   --config-path ~/.config/zotero-mcp/config.json \
+  --index-path ~/.config/zotero-mcp/chroma-recovery-YYYYMMDD \
   --output /tmp/zotero-paper-graph-snapshot.json
 ```
 
-`--config-path` selects the semantic model and collection-name settings. It
-does not by itself select the Zotero endpoint or Chroma directory. Those use
-the same environment-driven resolvers as the rest of Zotero MCP. An isolated
-development export must pin every source selector explicitly:
+`--index-path` selects a completed isolated build containing `manifest.json`.
+The manifest, rather than the active Chroma configuration, selects the exact
+collection and binds its source, embedding descriptor, collection identity,
+and content hashes. An isolated development export must still pin the active
+Zotero source selectors explicitly:
 
 ```bash
 export ZOTERO_NO_CLAUDE=true
 export ZOTERO_MCP_CONFIG_PATH=/tmp/pkb-zotero-dev/config.json
 export ZOTERO_MCP_CONFIG_DIR=/tmp/pkb-zotero-dev
-export ZOTERO_MCP_CHROMA_DB_PATH=/tmp/pkb-zotero-dev/chroma_db
 export ZOTERO_LOCAL=true
 export ZOTERO_LIBRARY_ID=0
 export ZOTERO_LIBRARY_TYPE=user
@@ -31,13 +32,15 @@ export ZOTERO_LOCAL_PORT=23120
 
 zotero-mcp export-snapshot \
   --config-path "$ZOTERO_MCP_CONFIG_PATH" \
+  --index-path /tmp/pkb-zotero-dev/chroma-recovery-YYYYMMDD \
   --output /tmp/zotero-paper-graph-dev-snapshot.json
 ```
 
-The command fails if the pinned Chroma directory does not already contain
-`chroma.sqlite3`. The development Chroma index must correspond to the same
-development Zotero endpoint; exact key and `dateModified` checks enforce that
-relationship without reading or updating another configured library.
+The command fails if the selected directory lacks a complete sealed manifest,
+its manifest-bound publication receipt, or Chroma database. The development index must correspond to the same
+development Zotero endpoint; manifest source identity plus exact key and
+`dateModified` checks enforce that relationship without reading or updating
+another configured library.
 
 The output is replaced atomically. The command exits with status 2 and emits a
 JSON error to stderr unless all of these checks pass:

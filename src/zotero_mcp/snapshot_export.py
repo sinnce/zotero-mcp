@@ -21,6 +21,10 @@ from typing import Any, Protocol, runtime_checkable
 
 EXCLUDED_ITEM_TYPES = frozenset({"attachment", "note", "annotation"})
 SNAPSHOT_SCHEMA_VERSION = "zotero-mcp-snapshot/1.0.0"
+SEALED_INDEX_SCHEMA_VERSION = "zotero-mcp-index-build/1.0.0"
+PUBLICATION_SCHEMA_VERSION = "zotero-mcp-index-publication/1.0.0"
+EMBEDDING_DESCRIPTOR_SCHEMA_VERSION = "zotero-mcp-embedding-descriptor/1.0.0"
+ISOLATED_3072_MODELS = frozenset({"gemini-embedding-001", "gemini-embedding-2-preview"})
 TEXT_VECTOR_DIMENSION = 3072
 DEFAULT_PAGE_SIZE = 100
 DEFAULT_MAX_PAGES = 100_000
@@ -78,6 +82,7 @@ def export_snapshot(
     page_size: int = DEFAULT_PAGE_SIZE,
     max_pages: int = DEFAULT_MAX_PAGES,
     retrieved_at: datetime | None = None,
+    sealed_build: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     """Export one complete read-only producer snapshot.
 
@@ -133,6 +138,8 @@ def export_snapshot(
         "embedding": _provenance_mapping(provenance),
         "counts": {"papers": len(papers), "embeddings": len(embeddings)},
     }
+    if sealed_build is not None:
+        stable_metadata["sealed_build"] = dict(sealed_build)
     stable_payload = {
         "metadata": stable_metadata,
         "papers": sorted(papers, key=lambda item: str(item["key"])),
@@ -211,6 +218,197 @@ def export_configured_snapshot(config_path: str | Path) -> dict[str, object]:
         snapshot = export_snapshot(get_zotero_client(), collection, provenance)
     if _directory_fingerprint(chroma_path) != source_fingerprint:
         raise SnapshotDriftError("Chroma source changed during export")
+    return snapshot
+
+
+def export_sealed_snapshot(config_path: str | Path, index_path: str | Path) -> dict[str, object]:
+    """Export only from a complete isolated build bound to the active Zotero source."""
+
+    config = Path(config_path).expanduser().resolve()
+    if not config.is_file():
+        raise SnapshotExportError(f"cannot read Zotero MCP config {config}")
+    sealed_path = Path(index_path).expanduser().resolve()
+    manifest_path = sealed_path / "manifest.json"
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise SnapshotCompletenessError(f"sealed index manifest is unavailable: {exc}") from exc
+    if (
+        not isinstance(manifest, Mapping)
+        or manifest.get("schema_version") != SEALED_INDEX_SCHEMA_VERSION
+        or manifest.get("status") != "complete"
+    ):
+        raise SnapshotCompletenessError("sealed index manifest is not complete")
+    publication_path = sealed_path / "publication.json"
+    try:
+        publication = json.loads(publication_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise SnapshotCompletenessError(f"sealed index publication receipt is unavailable: {exc}") from exc
+    if (
+        not isinstance(publication, Mapping)
+        or publication.get("schema_version") != PUBLICATION_SCHEMA_VERSION
+        or publication.get("status") != "published"
+        or publication.get("manifest_sha256") != _stable_hash(manifest)
+        or publication.get("index_identity") != manifest.get("index_identity")
+    ):
+        raise SnapshotCompletenessError("sealed index publication receipt is invalid")
+
+    source = manifest.get("source_identity")
+    index_identity = manifest.get("index_identity")
+    descriptor = manifest.get("embedding")
+    collection_metadata = manifest.get("collection_metadata")
+    if not isinstance(source, Mapping):
+        raise SnapshotProvenanceError("sealed source identity is incomplete")
+    if not isinstance(index_identity, Mapping):
+        raise SnapshotProvenanceError("sealed index identity is incomplete")
+    if not isinstance(descriptor, Mapping):
+        raise SnapshotProvenanceError("sealed embedding provenance is incomplete")
+    if not isinstance(collection_metadata, Mapping):
+        raise SnapshotProvenanceError("sealed index identity or provenance is incomplete")
+    source_map = dict(source)
+    index_map = dict(index_identity)
+    descriptor_map = dict(descriptor)
+    collection_metadata_map = dict(collection_metadata)
+    if manifest.get("embedding_descriptor_hash") != _stable_hash(descriptor_map):
+        raise SnapshotProvenanceError("sealed embedding descriptor hash is invalid")
+    if manifest.get("collection_metadata_hash") != _stable_hash(collection_metadata_map):
+        raise SnapshotProvenanceError("sealed collection metadata hash is invalid")
+    if collection_metadata_map.get("source_identity_hash") != _stable_hash(source_map):
+        raise SnapshotProvenanceError("sealed collection source identity hash is invalid")
+    if collection_metadata_map.get("embedding_descriptor_hash") != manifest.get("embedding_descriptor_hash"):
+        raise SnapshotProvenanceError("sealed collection embedding descriptor hash is invalid")
+    source_scope_hash = manifest.get("source_scope_hash")
+    if not isinstance(source_scope_hash, str) or collection_metadata_map.get("source_scope_hash") != source_scope_hash:
+        raise SnapshotProvenanceError("sealed collection source scope hash is invalid")
+
+    from chromadb import PersistentClient  # pyright: ignore[reportMissingImports]
+    from chromadb.config import Settings  # pyright: ignore[reportMissingImports]
+
+    from zotero_mcp.client import get_zotero_client
+    from zotero_mcp.index_build import source_identity, verify_collection_against_ledger
+
+    zotero_client = get_zotero_client()
+    if source_identity(zotero_client) != source_map:
+        raise SnapshotProvenanceError("active Zotero source identity differs from the sealed build")
+    built_version = manifest.get("zotero_library_version")
+    if _library_version(zotero_client) != built_version:
+        raise SnapshotDriftError("active Zotero library version differs from the sealed build")
+
+    source_fingerprint = _directory_fingerprint(sealed_path)
+    with tempfile.TemporaryDirectory(prefix="zotero-mcp-sealed-snapshot-") as temporary_directory:
+        clone_path = Path(temporary_directory) / "chroma"
+        shutil.copytree(sealed_path, clone_path)
+        if _directory_fingerprint(sealed_path) != source_fingerprint:
+            raise SnapshotDriftError("sealed index changed while its read-only clone was created")
+        chroma = PersistentClient(
+            path=str(clone_path),
+            settings=Settings(anonymized_telemetry=False, allow_reset=False, migrations="validate"),
+        )
+        collection_name = index_map.get("collection_name")
+        if not isinstance(collection_name, str) or not collection_name:
+            raise SnapshotProvenanceError("sealed collection name is unknown")
+        try:
+            collection = chroma.get_collection(name=collection_name, embedding_function=None)
+        except Exception as exc:
+            raise SnapshotCompletenessError(f"sealed Chroma collection does not exist: {collection_name}") from exc
+        if str(collection.id) != str(index_map.get("collection_id")):
+            raise SnapshotProvenanceError("sealed Chroma collection ID differs from the manifest")
+        if collection.metadata != collection_metadata_map:
+            raise SnapshotProvenanceError("sealed Chroma collection metadata differs from the manifest")
+        persisted = collection.configuration_json.get("embedding_function", {}).get("config")
+        if persisted != descriptor_map:
+            raise SnapshotProvenanceError("sealed Chroma embedding descriptor differs from the manifest")
+        if collection_metadata_map.get("index_uuid") != index_map.get("index_uuid"):
+            raise SnapshotProvenanceError("sealed index UUID differs from collection metadata")
+        if collection_metadata_map.get("build_run_id") != index_map.get("build_run_id"):
+            raise SnapshotProvenanceError("sealed build run ID differs from collection metadata")
+        descriptor_metadata = {
+            "provider": collection_metadata_map.get("embedding_provider"),
+            "route": collection_metadata_map.get("embedding_route"),
+            "model_name": collection_metadata_map.get("embedding_model"),
+            "endpoint": collection_metadata_map.get("embedding_endpoint"),
+            "task_type": collection_metadata_map.get("embedding_task_type"),
+            "dimension": collection_metadata_map.get("embedding_dimension"),
+            "producer": collection_metadata_map.get("embedding_producer"),
+            "producer_version": collection_metadata_map.get("embedding_producer_version"),
+            "descriptor_schema_version": collection_metadata_map.get("embedding_descriptor_schema_version"),
+        }
+        if descriptor_metadata != descriptor_map:
+            raise SnapshotProvenanceError("sealed collection embedding metadata differs from its descriptor")
+        verified = verify_collection_against_ledger(collection, clone_path / "input-ledger.json")
+        ledger = json.loads((clone_path / "input-ledger.json").read_text(encoding="utf-8"))
+        if _stable_hash(ledger) != source_scope_hash:
+            raise SnapshotProvenanceError("sealed frozen source scope differs from its manifest hash")
+        if verified.get("counts") != manifest.get("counts") or verified.get("hashes") != manifest.get("hashes"):
+            raise SnapshotProvenanceError("sealed collection contents differ from the manifest hashes")
+        model = descriptor_map.get("model_name")
+        dimension = descriptor_map.get("dimension")
+        if (
+            descriptor_map.get("provider") != "gemini"
+            or descriptor_map.get("route") != "gemini-direct"
+            or descriptor_map.get("task_type") != "RETRIEVAL_DOCUMENT"
+            or not isinstance(model, str)
+            or model not in ISOLATED_3072_MODELS
+            or dimension != TEXT_VECTOR_DIMENSION
+        ):
+            raise SnapshotProvenanceError("sealed embedding model or dimension is invalid")
+        producer = manifest.get("producer")
+        producer_version = producer.get("version") if isinstance(producer, Mapping) else None
+        if (
+            not isinstance(producer, Mapping)
+            or producer.get("name") != "zotero-mcp"
+            or not isinstance(producer_version, str)
+            or not producer_version
+            or descriptor_map.get("producer") != producer.get("name")
+            or descriptor_map.get("producer_version") != producer_version
+            or descriptor_map.get("descriptor_schema_version") != EMBEDDING_DESCRIPTOR_SCHEMA_VERSION
+        ):
+            raise SnapshotProvenanceError("sealed producer descriptor is invalid")
+        dependencies = producer.get("dependencies")
+        if (
+            not isinstance(dependencies, Mapping)
+            or not isinstance(dependencies.get("chromadb"), str)
+            or not dependencies.get("chromadb")
+            or not isinstance(dependencies.get("google-genai"), str)
+            or not dependencies.get("google-genai")
+        ):
+            raise SnapshotProvenanceError("sealed producer dependency versions are invalid")
+        if (
+            collection_metadata_map.get("chroma_version") != dependencies.get("chromadb")
+            or collection_metadata_map.get("google_genai_version") != dependencies.get("google-genai")
+        ):
+            raise SnapshotProvenanceError("sealed dependency versions differ from collection metadata")
+        hashes = manifest.get("hashes")
+        counts = manifest.get("counts")
+        if not isinstance(hashes, Mapping) or not isinstance(counts, Mapping):
+            raise SnapshotProvenanceError("sealed content hashes or counts are incomplete")
+        sealed_build = {
+            "manifest_schema_version": manifest["schema_version"],
+            "producer": dict(producer),
+            "coordinator_run_state": manifest.get("coordinator_run_state"),
+            "source_identity": source_map,
+            "zotero_library_version": built_version,
+            "source_scope_hash": source_scope_hash,
+            "index_identity": index_map,
+            "embedding": descriptor_map,
+            "embedding_descriptor_hash": manifest["embedding_descriptor_hash"],
+            "collection_metadata": collection_metadata_map,
+            "collection_metadata_hash": manifest["collection_metadata_hash"],
+            "content_hashes": dict(hashes),
+            "counts": dict(counts),
+        }
+        snapshot = export_snapshot(
+            zotero_client,
+            collection,
+            EmbeddingProvenance(
+                model=model,
+                dimension=TEXT_VECTOR_DIMENSION,
+                producer_version=str(producer_version or "") or None,
+            ),
+            sealed_build=sealed_build,
+        )
+    if _directory_fingerprint(sealed_path) != source_fingerprint:
+        raise SnapshotDriftError("sealed index changed during export")
     return snapshot
 
 
@@ -532,6 +730,7 @@ __all__ = [
     "SnapshotExportError",
     "SnapshotProvenanceError",
     "export_configured_snapshot",
+    "export_sealed_snapshot",
     "export_snapshot",
     "write_snapshot_atomic",
 ]
