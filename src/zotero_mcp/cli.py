@@ -231,6 +231,13 @@ def main():
     inspect_parser.add_argument("--stats", action="store_true", help="Show aggregate stats (formerly db-stats)")
     inspect_parser.add_argument("--config-path", help="Path to semantic search configuration file")
 
+    snapshot_parser = subparsers.add_parser(
+        "export-snapshot",
+        help="Export a read-only Zotero metadata and existing-vector snapshot",
+    )
+    snapshot_parser.add_argument("--output", required=True, help="Atomic JSON output path")
+    snapshot_parser.add_argument("--config-path", help="Path to semantic search configuration file")
+
     # Update command
     update_parser = subparsers.add_parser("update", help="Update zotero-mcp to the latest version")
     update_parser.add_argument("--check-only", action="store_true", help="Only check for updates without installing")
@@ -576,6 +583,47 @@ def main():
         except Exception as e:
             print(f"Error inspecting database: {e}")
             sys.exit(1)
+
+    elif args.command == "export-snapshot":
+        setup_zotero_environment()
+        from zotero_mcp.snapshot_export import (
+            SnapshotExportError,
+            export_configured_snapshot,
+            write_snapshot_atomic,
+        )
+
+        config_path = Path(args.config_path) if args.config_path else get_config_path()
+        try:
+            snapshot = export_configured_snapshot(config_path)
+            write_snapshot_atomic(snapshot, args.output)
+            print(
+                json.dumps(
+                    {
+                        "status": "exported",
+                        "output": str(Path(args.output).expanduser().resolve()),
+                        "snapshot_id": snapshot["snapshot_id"],
+                        "snapshot_hash": snapshot["snapshot_hash"],
+                        "papers": len(snapshot["papers"]),
+                        "embeddings": len(snapshot["embeddings"]),
+                    },
+                    separators=(",", ":"),
+                    sort_keys=True,
+                )
+            )
+        except Exception as exc:
+            print(
+                json.dumps(
+                    {
+                        "status": "error",
+                        "code": getattr(exc, "code", SnapshotExportError.code),
+                        "message": str(exc),
+                    },
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ),
+                file=sys.stderr,
+            )
+            sys.exit(2)
 
     elif args.command == "update":
         from zotero_mcp.updater import update_zotero_mcp
