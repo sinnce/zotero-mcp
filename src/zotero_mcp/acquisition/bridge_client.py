@@ -247,9 +247,7 @@ def _is_valid_candidate_url(value: object) -> bool:
 
 
 def _is_datetime(value: object) -> bool:
-    if not isinstance(value, str) or not re.fullmatch(
-        r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z", value
-    ):
+    if not isinstance(value, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z", value):
         return False
     try:
         datetime.fromisoformat(value.replace("Z", "+00:00"))
@@ -280,10 +278,14 @@ class BridgeClient:
         }
 
     def _unavailable_result(self, message: str = "Bridge is unavailable") -> BridgeDownloadResult:
-        return BridgeDownloadResult(status="failed", auth_state="missing", error_code="BRIDGE_UNAVAILABLE", message=message)
+        return BridgeDownloadResult(
+            status="failed", auth_state="missing", error_code="BRIDGE_UNAVAILABLE", message=message
+        )
 
     def _timeout_result(self) -> BridgeDownloadResult:
-        return BridgeDownloadResult(status="failed", auth_state="missing", error_code="TIMEOUT", message="Bridge request failed")
+        return BridgeDownloadResult(
+            status="failed", auth_state="missing", error_code="TIMEOUT", message="Bridge request failed"
+        )
 
     def _parse_download_response(
         self,
@@ -328,8 +330,7 @@ class BridgeClient:
                 return None
             if (
                 response.status_code != 200
-                or
-                auth_state != "ready"
+                or auth_state != "ready"
                 or payload.get("request_id") != request_id
                 or not _is_uuid(payload.get("transfer_id"))
                 or not isinstance(payload.get("file_path"), str)
@@ -460,10 +461,14 @@ class BridgeClient:
         try:
             response = httpx.get(f"{self.base_url}/bridge/health/ready", headers=headers, timeout=2.0)
         except httpx.HTTPError as exc:
-            return BridgeHealthResult(False, self.base_url, "unavailable", f"Bridge health request failed: {exc.__class__.__name__}")
+            return BridgeHealthResult(
+                False, self.base_url, "unavailable", f"Bridge health request failed: {exc.__class__.__name__}"
+            )
         parsed = self._parse_health_response(response)
         if parsed is None:
-            return BridgeHealthResult(False, self.base_url, "unavailable", "Bridge returned an invalid readiness response.")
+            return BridgeHealthResult(
+                False, self.base_url, "unavailable", "Bridge returned an invalid readiness response."
+            )
         return parsed
 
     def is_available(self) -> bool:
@@ -484,7 +489,12 @@ class BridgeClient:
         status = payload.get("status")
         caps = payload.get("capabilities")
         sessions = payload.get("sessions")
-        if not isinstance(status, str) or status not in {"ready", "not_ready"} or not isinstance(caps, dict) or not isinstance(sessions, dict):
+        if (
+            not isinstance(status, str)
+            or status not in {"ready", "not_ready"}
+            or not isinstance(caps, dict)
+            or not isinstance(sessions, dict)
+        ):
             return None
         if set(payload) != {"contract_version", "service", "status", "error_code", "capabilities", "sessions"}:
             return None
