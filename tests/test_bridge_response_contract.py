@@ -2,118 +2,142 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from zotero_mcp.acquisition.bridge_client import BridgeClient, BridgeDownloadRequest, BridgeDownloadResult
-from zotero_mcp.tools.acquire_paper import _is_explicit_paywall
+from zotero_mcp.acquisition.bridge_client import BridgeClient, BridgeDownloadRequest
+
+TOKEN = "test-token-that-is-long-enough-for-the-v2-contract"
+REQUEST_ID = "11111111-1111-4111-8111-111111111111"
 
 
-def _download(payload):
+def _response(payload, status_code=200):
     response = Mock()
-    response.status_code = 200
+    response.status_code = status_code
+    response.headers = {"content-type": "application/json; charset=utf-8"}
     response.json.return_value = payload
-    client = BridgeClient(auth_token="test-token-that-is-long-enough-for-the-contract")
-    request = BridgeDownloadRequest("10.1000/example", "https://publisher.example/paper.pdf", "campus")
-    with patch("zotero_mcp.acquisition.bridge_client.httpx.post", return_value=response):
-        return client.download(request)
+    return response
+
+
+def _request():
+    return BridgeDownloadRequest(
+        "10.1000/example",
+        "https://publisher.example/paper.pdf",
+        "campus",
+        request_id=REQUEST_ID,
+    )
+
+
+def _valid_success():
+    return {
+        "contract_version": "2.0.0",
+        "request_id": REQUEST_ID,
+        "status": "complete",
+        "auth_state": "ready",
+        "transfer_id": "33333333-3333-4333-8333-333333333333",
+        "file_path": "/tmp/paper.pdf",
+        "sha256": "a" * 64,
+        "size_bytes": 10,
+        "content_type": "application/pdf",
+        "final_url": "https://publisher.example/paper.pdf",
+        "expires_at": "2026-09-26T12:00:00Z",
+        "ack_required": True,
+        "error_code": None,
+    }
+
+
+def _error(code, status, auth_state, message, request_id=REQUEST_ID):
+    return {
+        "contract_version": "2.0.0",
+        "request_id": request_id,
+        "status": status,
+        "auth_state": auth_state,
+        "error_code": code,
+        "message": message,
+    }
+
+
+def _download(payload, status_code=200):
+    with patch(
+        "zotero_mcp.acquisition.bridge_client.httpx.post",
+        return_value=_response(payload, status_code),
+    ):
+        return BridgeClient(auth_token=TOKEN).download(_request())
 
 
 @pytest.mark.parametrize(
-    ("payload", "status", "auth_state", "error_code"),
+    ("payload", "status", "auth_state", "error_code", "http_status"),
     [
         (
-            {"status": "auth_required", "auth_state": "missing", "error_code": "AUTH_REQUIRED"},
-            "auth_required",
-            "missing",
-            "AUTH_REQUIRED",
-        ),
-        (
-            {"status": "auth_required", "auth_state": "expired", "error_code": "AUTH_REQUIRED"},
+            _error("AUTH_REQUIRED", "auth_required", "expired", "Browser authentication required."),
             "auth_required",
             "expired",
             "AUTH_REQUIRED",
+            428,
         ),
         (
-            {"status": "failed", "auth_state": "missing", "error_code": "DOMAIN_BLOCKED"},
-            "failed",
+            _error("AUTH_MISSING", "auth_required", "missing", "Browser authentication is missing."),
+            "auth_required",
             "missing",
-            "DOMAIN_BLOCKED",
+            "AUTH_MISSING",
+            428,
         ),
         (
-            {"status": "failed", "auth_state": "ready", "error_code": "DOMAIN_BLOCKED"},
-            "failed",
-            "ready",
-            "DOMAIN_BLOCKED",
-        ),
-        (
-            {"status": "failed", "auth_state": "interactive_required", "error_code": "CAPTCHA"},
-            "failed",
+            _error("CAPTCHA", "auth_required", "interactive_required", "Browser challenge requires interaction."),
+            "auth_required",
             "interactive_required",
             "CAPTCHA",
+            428,
         ),
-        ({"status": "failed", "auth_state": "ready", "error_code": "HTML_LANDING"}, "failed", "ready", "HTML_LANDING"),
         (
-            {"status": "failed", "auth_state": "ready", "error_code": "ACCESS_DENIED"},
+            _error("DOMAIN_BLOCKED", "failed", "unchecked", "Destination domain is blocked."),
             "failed",
-            "ready",
-            "ACCESS_DENIED",
+            "unchecked",
+            "DOMAIN_BLOCKED",
+            422,
         ),
-        ({"status": "failed", "auth_state": "ready", "error_code": "TIMEOUT"}, "failed", "ready", "TIMEOUT"),
-        ({"status": "failed", "auth_state": "ready", "error_code": "CANCELLED"}, "failed", "ready", "CANCELLED"),
-        ({"status": "failed", "auth_state": "ready", "error_code": "NO_PDF"}, "failed", "ready", "NO_PDF"),
+        (
+            _error("CAPABILITY_UNAVAILABLE", "failed", "unchecked", "Browser interception is unavailable."),
+            "failed",
+            "unchecked",
+            "CAPABILITY_UNAVAILABLE",
+            503,
+        ),
     ],
 )
-def test_download_accepts_type_script_producer_responses(payload, status, auth_state, error_code):
-    result = _download(payload)
-
-    assert result.status == status
-    assert result.auth_state == auth_state
-    assert result.error_code == error_code
+def test_download_accepts_exact_v2_error_envelopes(payload, status, auth_state, error_code, http_status):
+    result = _download(payload, http_status)
+    assert (result.status, result.auth_state, result.error_code) == (status, auth_state, error_code)
+    assert result.contract_version == "2.0.0"
 
 
 @pytest.mark.parametrize(
     "payload",
     [
-        {"status": "complete", "auth_state": "ready", "file_path": "/tmp/paper.pdf"},
-        {"status": "complete", "auth_state": "ready", "error_code": "AUTH_REQUIRED", "file_path": "/tmp/paper.pdf"},
-        {"status": "complete", "auth_state": "ready", "error_code": None},
-        {"status": "complete", "auth_state": "ready", "error_code": None, "file_path": None},
-        {"status": "complete", "auth_state": "ready", "error_code": None, "file_path": ""},
-        {"status": "complete", "auth_state": "ready", "error_code": None, "file_path": 1},
+        {**_valid_success(), "extra": True},
+        {**_valid_success(), "sha256": "A" * 64},
+        {**_valid_success(), "size_bytes": True},
+        {**_valid_success(), "final_url": "http://publisher.example/paper.pdf"},
+        {**_valid_success(), "request_id": "22222222-2222-4222-8222-222222222222"},
+        {**_valid_success(), "ack_required": False},
     ],
 )
-def test_download_rejects_incomplete_complete_response(payload):
+def test_download_rejects_invalid_v2_success_payloads(payload):
     result = _download(payload)
-
-    assert result.status == "failed"
-    assert result.auth_state == "missing"
     assert result.error_code == "BRIDGE_UNAVAILABLE"
 
 
 @pytest.mark.parametrize(
-    "payload",
+    ("payload", "status_code"),
     [
-        {"status": "complete", "auth_state": "expired", "error_code": None, "file_path": "/tmp/paper.pdf"},
-        {"status": "auth_required", "auth_state": "ready", "error_code": "AUTH_REQUIRED"},
-        {"status": "auth_required", "auth_state": "interactive_required", "error_code": "CAPTCHA"},
-        {
-            "status": "auth_required",
-            "auth_state": "expired",
-            "error_code": "AUTH_REQUIRED",
-            "file_path": "/tmp/paper.pdf",
-        },
-        {"status": "failed", "auth_state": "ready", "error_code": "AUTH_REQUIRED"},
-        {"status": "failed", "auth_state": "ready", "error_code": "NO_PDF", "file_path": "/tmp/paper.pdf"},
+        (_valid_success(), 500),
+        (_error("DOMAIN_BLOCKED", "failed", "unchecked", "Destination domain is blocked."), 200),
+        ({**_error("DOMAIN_BLOCKED", "failed", "unchecked", "Destination domain is blocked."), "message": "leak"}, 422),
     ],
 )
-def test_download_rejects_invalid_status_combinations(payload):
-    result = _download(payload)
-
-    assert result.status == "failed"
-    assert result.auth_state == "missing"
+def test_download_rejects_http_or_message_contract_drift(payload, status_code):
+    result = _download(payload, status_code)
     assert result.error_code == "BRIDGE_UNAVAILABLE"
 
 
-@pytest.mark.parametrize("error_code", ["NO_PDF", "CAPTCHA", "CANCELLED"])
-def test_terminal_bridge_errors_do_not_trigger_libproxy_fallback(error_code):
-    result = BridgeDownloadResult(status="failed", auth_state="ready", error_code=error_code)
-
-    assert _is_explicit_paywall(result) is False
+def test_unauthorized_error_must_not_echo_request_id():
+    payload = _error("UNAUTHORIZED", "failed", "unchecked", "Authentication required.", request_id=REQUEST_ID)
+    result = _download(payload, 401)
+    assert result.error_code == "BRIDGE_UNAVAILABLE"

@@ -3,20 +3,19 @@ from unittest.mock import Mock, patch
 import httpx
 import pytest
 
-from zotero_mcp.acquisition.bridge_client import BridgeClient, BridgeDownloadRequest
+from zotero_mcp.acquisition.bridge_client import (
+    BRIDGE_CONTRACT_VERSION,
+    BRIDGE_SERVICE,
+    BridgeClient,
+    BridgeDownloadRequest,
+)
+
+TOKEN = "test-token-that-is-long-enough-for-the-v2-contract"
+REQUEST_ID = "11111111-1111-4111-8111-111111111111"
+TRANSFER_ID = "33333333-3333-4333-8333-333333333333"
 
 
-def _response(status_code: int, payload: dict[str, str] | None = None) -> Mock:
-    response = Mock()
-    response.status_code = status_code
-    response.json.return_value = payload or {}
-    response.raise_for_status.side_effect = (
-        httpx.HTTPStatusError("status", request=Mock(), response=response) if status_code >= 400 else None
-    )
-    return response
-
-
-def _health_response(payload, content_type: str = "application/json", status_code: int = 200) -> Mock:
+def _response(status_code: int, payload: object, *, content_type: str = "application/json") -> Mock:
     response = Mock()
     response.status_code = status_code
     response.headers = {"content-type": content_type}
@@ -24,241 +23,270 @@ def _health_response(payload, content_type: str = "application/json", status_cod
     return response
 
 
+def _request(**kwargs) -> BridgeDownloadRequest:
+    return BridgeDownloadRequest(
+        "10.1000/example",
+        "https://publisher.example/paper.pdf",
+        "campus",
+        request_id=REQUEST_ID,
+        **kwargs,
+    )
+
+
+def _success(**overrides) -> dict:
+    value = {
+        "contract_version": BRIDGE_CONTRACT_VERSION,
+        "request_id": REQUEST_ID,
+        "status": "complete",
+        "auth_state": "ready",
+        "transfer_id": TRANSFER_ID,
+        "file_path": "/tmp/paper.pdf",
+        "sha256": "a" * 64,
+        "size_bytes": 123,
+        "content_type": "application/pdf",
+        "final_url": "https://publisher.example/paper.pdf",
+        "expires_at": "2026-09-26T12:00:00Z",
+        "ack_required": True,
+        "error_code": None,
+    }
+    value.update(overrides)
+    return value
+
+
+def _error(code: str, *, status: str = "failed", auth_state: str = "unchecked", request_id=REQUEST_ID) -> dict:
+    return {
+        "contract_version": BRIDGE_CONTRACT_VERSION,
+        "request_id": request_id,
+        "status": status,
+        "auth_state": auth_state,
+        "error_code": code,
+        "message": {
+            "AUTH_EXPIRED": "Browser authentication expired.",
+            "DOMAIN_BLOCKED": "Destination domain is blocked.",
+            "CAPABILITY_UNAVAILABLE": "Browser interception is unavailable.",
+        }.get(code, "Internal bridge failure."),
+    }
+
+
+def _health(status: str = "ready", *, context_fetch: bool = False) -> dict:
+    capabilities = {"browser_get_version": status == "ready", "fetch_interception": status == "ready"}
+    if context_fetch:
+        capabilities["fetch_interception"] = False
+        capabilities["browser_context_fetch"] = status == "ready"
+    if status == "ready":
+        return {
+            "contract_version": BRIDGE_CONTRACT_VERSION,
+            "service": BRIDGE_SERVICE,
+            "status": "ready",
+            "error_code": None,
+            "capabilities": capabilities,
+            "sessions": {"configured": 1, "ready": 1},
+        }
+    capabilities = {"browser_get_version": False, "fetch_interception": False}
+    if context_fetch:
+        capabilities["browser_context_fetch"] = False
+    return {
+        "contract_version": BRIDGE_CONTRACT_VERSION,
+        "service": BRIDGE_SERVICE,
+        "status": "not_ready",
+        "error_code": "CAPABILITY_UNAVAILABLE",
+        "capabilities": capabilities,
+        "sessions": {"configured": 1, "ready": 0},
+    }
+
+
 def test_missing_token_fails_closed_without_http_request(monkeypatch):
-    # Given: bridge authentication is not configured.
+    monkeypatch.delenv("ZOTERO_BRIDGE_TOKEN", raising=False)
     monkeypatch.delenv("BRIDGE_AUTH_TOKEN", raising=False)
+    monkeypatch.delenv("BRIDGE_TOKEN", raising=False)
     client = BridgeClient()
-    request = BridgeDownloadRequest("10.1000/example", "https://publisher.example/paper.pdf", "campus")
-
-    # When: availability and a download are requested.
-    with (
-        patch("zotero_mcp.acquisition.bridge_client.httpx.get") as get,
-        patch("zotero_mcp.acquisition.bridge_client.httpx.post") as post,
-    ):
-        available = client.is_available()
-        result = client.download(request)
-
-    # Then: no request is sent and the bridge is unavailable.
-    assert available is False
-    assert result.status == "failed"
-    assert result.error_code == "BRIDGE_UNAVAILABLE"
+    with patch("zotero_mcp.acquisition.bridge_client.httpx.get") as get, patch(
+        "zotero_mcp.acquisition.bridge_client.httpx.post"
+    ) as post:
+        assert client.is_available() is False
+        assert client.download(_request()).error_code == "BRIDGE_UNAVAILABLE"
     get.assert_not_called()
     post.assert_not_called()
 
 
-def test_health_and_download_use_identical_bearer_auth_headers():
-    # Given: a configured bridge client.
-    token = "test-token-that-is-long-enough-for-the-contract"
-    client = BridgeClient(auth_token=token)
-    request = BridgeDownloadRequest("10.1000/example", "https://publisher.example/paper.pdf", "campus")
+def test_download_emits_v2_identity_auth_and_allowlist():
+    client = BridgeClient(auth_token=TOKEN)
+    with patch(
+        "zotero_mcp.acquisition.bridge_client.httpx.post",
+        return_value=_response(200, _success()),
+    ) as post:
+        result = client.download(_request())
 
-    # When: the client probes health and downloads.
-    with (
-        patch(
-            "zotero_mcp.acquisition.bridge_client.httpx.get",
-            return_value=_health_response({"status": "ok", "port": 9870}),
-        ) as get,
-        patch(
-            "zotero_mcp.acquisition.bridge_client.httpx.post",
-            return_value=_response(
-                200,
-                {"status": "complete", "auth_state": "ready", "error_code": None, "file_path": "/tmp/paper.pdf"},
-            ),
-        ) as post,
-    ):
-        assert client.is_available() is True
-        result = client.download(request)
-
-    # Then: both endpoints receive the same bearer credentials.
     assert result.status == "complete"
-    assert result.auth_state == "ready"
-    assert get.call_args.kwargs["headers"] == {"Authorization": f"Bearer {token}"}
-    assert post.call_args.kwargs["headers"] == {"Authorization": f"Bearer {token}"}
+    assert result.request_id == REQUEST_ID
+    assert result.transfer_id == TRANSFER_ID
+    assert result.sha256 == "a" * 64
+    assert result.size_bytes == 123
+    assert result.ack_required is True
+    assert post.call_args.kwargs["headers"] == {
+        "Authorization": f"Bearer {TOKEN}",
+        "Accept": "application/json",
+        "Content-Type": "application/json; charset=utf-8",
+    }
+    payload = post.call_args.kwargs["json"]
+    assert payload["contract_version"] == BRIDGE_CONTRACT_VERSION
+    assert payload["request_id"] == REQUEST_ID
+    assert payload["allowed_domains"] == ["publisher.example"]
+
+
+def test_download_derives_nested_domains_and_bounded_extras(monkeypatch):
+    monkeypatch.setenv(
+        "BRIDGE_ALLOWED_DOMAINS",
+        "Example.COM, example.com, bad domain, " + ",".join(f"extra{i}.example" for i in range(40)),
+    )
+    request = BridgeDownloadRequest(
+        "10.1000/example",
+        "https://libproxy.example/link?url=https%3A%2F%2Fpublisher.example%2Fpaper%3Furl%3D"
+        "https%253A%252F%252Fcdn.example%252Fpaper.pdf",
+        "campus",
+        request_id=REQUEST_ID,
+    )
+    with patch(
+        "zotero_mcp.acquisition.bridge_client.httpx.post",
+        return_value=_response(200, _success(final_url="https://publisher.example/paper.pdf")),
+    ) as post:
+        BridgeClient(auth_token=TOKEN).download(request)
+    domains = post.call_args.kwargs["json"]["allowed_domains"]
+    assert domains[:3] == ["libproxy.example", "publisher.example", "cdn.example"]
+    assert domains.count("example.com") == 1
+    assert "bad domain" not in domains
+    assert len(domains) == 32
+
+
+def test_explicit_allowlist_is_authoritative_and_serialized():
+    request = BridgeDownloadRequest(
+        "10.1000/example",
+        "https://publisher.example/paper.pdf",
+        "campus",
+        request_id=REQUEST_ID,
+        allowed_domains=["publisher.example"],
+    )
+    with patch(
+        "zotero_mcp.acquisition.bridge_client.httpx.post",
+        return_value=_response(503, _error("CAPABILITY_UNAVAILABLE")),
+    ) as post:
+        BridgeClient(auth_token=TOKEN).download(request)
+    assert post.call_args.kwargs["json"]["allowed_domains"] == ["publisher.example"]
+
+
+@pytest.mark.parametrize(
+    "candidate_url",
+    [
+        "http://publisher.example/paper.pdf",
+        "https://127.0.0.1/paper.pdf",
+        "https://publisher.example./paper.pdf",
+        "https://user:password@publisher.example/paper.pdf",
+        "https://publisher.example/paper.pdf#fragment",
+    ],
+)
+def test_candidate_url_policy_fails_closed_before_transport(candidate_url):
+    request = BridgeDownloadRequest("10.1000/example", candidate_url, "campus", request_id=REQUEST_ID)
+    with patch("zotero_mcp.acquisition.bridge_client.httpx.post") as post:
+        result = BridgeClient(auth_token=TOKEN).download(request)
+    assert result.error_code == "DOMAIN_BLOCKED"
+    post.assert_not_called()
+
+
+def test_missing_request_id_is_generated_and_sent_as_uuid():
+    request = BridgeDownloadRequest("10.1000/example", "https://publisher.example/paper.pdf", "campus")
+    with patch(
+        "zotero_mcp.acquisition.bridge_client.httpx.post",
+        return_value=_response(503, _error("CAPABILITY_UNAVAILABLE", request_id=None)),
+    ) as post:
+        BridgeClient(auth_token=TOKEN).download(request)
+    request_id = post.call_args.kwargs["json"]["request_id"]
+    assert isinstance(request_id, str) and len(request_id) == 36
+
+
+def test_download_preserves_typed_v2_error_from_non_200_response():
+    with patch(
+        "zotero_mcp.acquisition.bridge_client.httpx.post",
+        return_value=_response(428, _error("AUTH_EXPIRED", status="auth_required", auth_state="expired")),
+    ):
+        result = BridgeClient(auth_token=TOKEN).download(_request())
+    assert result.status == "auth_required"
+    assert result.auth_state == "expired"
+    assert result.error_code == "AUTH_EXPIRED"
+
+
+def test_download_rejects_malformed_or_incomplete_success():
+    for payload in (
+        _success(file_path=None),
+        _success(sha256="A" * 64),
+        _success(size_bytes=True),
+        _success(final_url="https://other.example/paper.pdf"),
+        {**_success(), "extra": True},
+    ):
+        with patch(
+            "zotero_mcp.acquisition.bridge_client.httpx.post",
+            return_value=_response(200, payload),
+        ):
+            result = BridgeClient(auth_token=TOKEN).download(_request())
+        assert result.error_code == "BRIDGE_UNAVAILABLE"
+
+
+def test_download_maps_timeout_and_transport_errors():
+    with patch(
+        "zotero_mcp.acquisition.bridge_client.httpx.post",
+        side_effect=httpx.TimeoutException("timeout"),
+    ):
+        assert BridgeClient(auth_token=TOKEN).download(_request()).error_code == "TIMEOUT"
+    with patch(
+        "zotero_mcp.acquisition.bridge_client.httpx.post",
+        side_effect=httpx.ConnectError("connect"),
+    ):
+        assert BridgeClient(auth_token=TOKEN).download(_request()).error_code == "BRIDGE_UNAVAILABLE"
+
+
+def test_ready_health_requires_v2_capabilities_and_auth():
+    client = BridgeClient(auth_token=TOKEN)
+    with patch(
+        "zotero_mcp.acquisition.bridge_client.httpx.get",
+        return_value=_response(200, _health(), content_type="application/json; charset=utf-8"),
+    ) as get:
+        health = client.health()
+    assert health.available is True
+    assert health.status == "ready"
+    assert health.ready_sessions == 1
+    assert get.call_args.kwargs["headers"]["Authorization"] == f"Bearer {TOKEN}"
+    assert get.call_args.args[0].endswith("/bridge/health/ready")
+
+
+def test_health_rejects_unknown_capability_fields():
+    payload = _health()
+    payload["capabilities"]["browser_context_fetch"] = True
+    with patch(
+        "zotero_mcp.acquisition.bridge_client.httpx.get",
+        return_value=_response(200, payload),
+    ):
+        assert BridgeClient(auth_token=TOKEN).is_available() is False
+
+
+def test_not_ready_health_is_not_available_even_with_valid_json():
+    with patch(
+        "zotero_mcp.acquisition.bridge_client.httpx.get",
+        return_value=_response(503, _health("not_ready")),
+    ):
+        health = BridgeClient(auth_token=TOKEN).health()
+    assert health.available is False
+    assert health.status == "not_ready"
+    assert health.error_code == "CAPABILITY_UNAVAILABLE"
 
 
 @pytest.mark.parametrize(
     "response",
     [
-        _health_response([]),
-        _health_response({}),
-        _health_response({"status": "degraded", "port": 9870}),
-        _health_response({"status": "ok", "port": 0}),
-        _health_response({"status": "ok", "port": 65536}),
-        _health_response({"status": "ok", "port": "9870"}),
-        _health_response({"status": "ok", "port": True}),
-        _health_response({"status": "ok", "port": 9870}, content_type="text/plain"),
+        _response(200, _health("ready"), content_type="text/plain"),
+        _response(200, {**_health("ready"), "service": "other"}),
+        _response(200, {**_health("ready"), "sessions": {"configured": 1, "ready": 2}}),
+        _response(503, {**_health("not_ready"), "capabilities": {"browser_get_version": True, "fetch_interception": False}}),
     ],
 )
-def test_health_fails_closed_for_invalid_application_payload(response):
-    client = BridgeClient(auth_token="test-token-that-is-long-enough-for-the-contract")
-
+def test_health_fails_closed_for_invalid_readiness(response):
     with patch("zotero_mcp.acquisition.bridge_client.httpx.get", return_value=response):
-        available = client.is_available()
-
-    assert available is False
-
-
-def test_health_fails_closed_for_malformed_json():
-    response = _health_response({"status": "ok", "port": 9870})
-    response.json.side_effect = ValueError("malformed JSON")
-    client = BridgeClient(auth_token="test-token-that-is-long-enough-for-the-contract")
-
-    with patch("zotero_mcp.acquisition.bridge_client.httpx.get", return_value=response):
-        available = client.is_available()
-
-    assert available is False
-
-
-def test_download_maps_unauthorized_to_bridge_unavailable_without_exposing_token():
-    # Given: a configured client whose bridge rejects its credentials.
-    token = "test-token-that-must-not-appear-in-errors-or-logs"
-    client = BridgeClient(auth_token=token)
-    request = BridgeDownloadRequest("10.1000/example", "https://publisher.example/paper.pdf", "campus")
-
-    # When: the bridge returns 401.
-    with patch("zotero_mcp.acquisition.bridge_client.httpx.post", return_value=_response(401)):
-        result = client.download(request)
-
-    # Then: the authorization result is explicit and redacted.
-    assert result.error_code == "BRIDGE_UNAVAILABLE"
-    assert result.auth_state == "missing"
-    assert token not in (result.message or "")
-
-
-def test_download_preserves_domain_blocked_for_acquisition_fallback():
-    # Given: a direct DOI attempt denied by the bridge allowlist.
-    client = BridgeClient(auth_token="test-token-that-is-long-enough-for-the-contract")
-    request = BridgeDownloadRequest("10.1000/example", "https://doi.org/10.1000/example", "campus")
-
-    # When: the bridge responds with its DOMAIN_BLOCKED contract error.
-    with patch(
-        "zotero_mcp.acquisition.bridge_client.httpx.post",
-        return_value=_response(
-            200,
-            {"status": "failed", "error_code": "DOMAIN_BLOCKED", "auth_state": "ready", "file_path": None},
-        ),
-    ):
-        result = client.download(request)
-
-    # Then: acquisition can distinguish the fallback-eligible result.
-    assert result.error_code == "DOMAIN_BLOCKED"
-    assert result.auth_state == "ready"
-
-
-def test_download_preserves_valid_auth_required_response():
-    client = BridgeClient(auth_token="test-token-that-is-long-enough-for-the-contract")
-    request = BridgeDownloadRequest("10.1000/example", "https://publisher.example/paper.pdf", "campus")
-
-    with patch(
-        "zotero_mcp.acquisition.bridge_client.httpx.post",
-        return_value=_response(
-            200,
-            {"status": "auth_required", "auth_state": "expired", "error_code": "AUTH_REQUIRED", "file_path": None},
-        ),
-    ):
-        result = client.download(request)
-
-    assert result.status == "auth_required"
-    assert result.auth_state == "expired"
-    assert result.error_code == "AUTH_REQUIRED"
-
-
-def test_download_fails_stably_when_response_json_is_malformed():
-    response = _response(200)
-    response.json.side_effect = ValueError("malformed JSON")
-    client = BridgeClient(auth_token="test-token-that-is-long-enough-for-the-contract")
-    request = BridgeDownloadRequest("10.1000/example", "https://publisher.example/paper.pdf", "campus")
-
-    with patch("zotero_mcp.acquisition.bridge_client.httpx.post", return_value=response):
-        result = client.download(request)
-
-    assert result.status == "failed"
-    assert result.auth_state == "missing"
-    assert result.error_code == "BRIDGE_UNAVAILABLE"
-    assert result.message == "Bridge is unavailable"
-
-
-@pytest.mark.parametrize("payload", [[], "not an object", 1])
-def test_download_fails_stably_when_response_json_is_not_an_object(payload):
-    client = BridgeClient(auth_token="test-token-that-is-long-enough-for-the-contract")
-    request = BridgeDownloadRequest("10.1000/example", "https://publisher.example/paper.pdf", "campus")
-
-    with patch("zotero_mcp.acquisition.bridge_client.httpx.post", return_value=_response(200, payload)):
-        result = client.download(request)
-
-    assert result.status == "failed"
-    assert result.auth_state == "missing"
-    assert result.error_code == "BRIDGE_UNAVAILABLE"
-
-
-@pytest.mark.parametrize(
-    "payload",
-    [
-        {"auth_state": "ready", "error_code": "AUTH_REQUIRED"},
-        {"status": "failed", "error_code": "AUTH_REQUIRED"},
-        {"status": "failed", "auth_state": "ready"},
-    ],
-)
-def test_download_fails_stably_when_error_response_fields_are_missing(payload):
-    client = BridgeClient(auth_token="test-token-that-is-long-enough-for-the-contract")
-    request = BridgeDownloadRequest("10.1000/example", "https://publisher.example/paper.pdf", "campus")
-
-    with patch("zotero_mcp.acquisition.bridge_client.httpx.post", return_value=_response(403, payload)):
-        result = client.download(request)
-
-    assert result.status == "failed"
-    assert result.auth_state == "missing"
-    assert result.error_code == "BRIDGE_UNAVAILABLE"
-
-
-@pytest.mark.parametrize(
-    "payload",
-    [
-        {"status": "unknown", "auth_state": "ready", "error_code": "AUTH_REQUIRED"},
-        {"status": "failed", "auth_state": "unknown", "error_code": "AUTH_REQUIRED"},
-        {"status": "failed", "auth_state": "ready", "error_code": "UNKNOWN"},
-    ],
-)
-def test_download_fails_stably_when_response_enums_are_invalid(payload):
-    client = BridgeClient(auth_token="test-token-that-is-long-enough-for-the-contract")
-    request = BridgeDownloadRequest("10.1000/example", "https://publisher.example/paper.pdf", "campus")
-
-    with patch("zotero_mcp.acquisition.bridge_client.httpx.post", return_value=_response(200, payload)):
-        result = client.download(request)
-
-    assert result.status == "failed"
-    assert result.auth_state == "missing"
-    assert result.error_code == "BRIDGE_UNAVAILABLE"
-
-
-def test_download_payload_derives_nested_candidate_domains_and_bounded_extras(monkeypatch):
-    # Given: a LibProxy URL with two nested targets and malformed or excessive environment extras.
-    monkeypatch.setenv(
-        "BRIDGE_ALLOWED_DOMAINS",
-        ", LIBPROXY.example, Example.COM, example.com ,bad domain, " + ",".join(f"extra{i}.example" for i in range(40)),
-    )
-    candidate_url = (
-        "https://LIBPROXY.example/link?url=https%3A%2F%2FPUBLISHER.example%2Fpaper%3Furl%3D"
-        "https%253A%252F%252FCDN.example%252Fpaper.pdf"
-    )
-    client = BridgeClient(auth_token="test-token-that-is-long-enough-for-the-contract")
-    request = BridgeDownloadRequest("10.1000/example", candidate_url, "campus")
-
-    # When: the request is serialized for the bridge.
-    with patch(
-        "zotero_mcp.acquisition.bridge_client.httpx.post",
-        return_value=_response(
-            200,
-            {"status": "complete", "auth_state": "ready", "error_code": None, "file_path": "/tmp/paper.pdf"},
-        ),
-    ) as post:
-        client.download(request)
-
-    # Then: candidate hosts lead the allowlist, malformed extras are omitted, and the list is bounded.
-    domains = post.call_args.kwargs["json"]["allowed_domains"]
-    assert domains[:3] == ["libproxy.example", "publisher.example", "cdn.example"]
-    assert "example.com" in domains
-    assert domains.count("libproxy.example") == 1
-    assert domains.count("example.com") == 1
-    assert "bad domain" not in domains
-    assert len(domains) == 32
+        assert BridgeClient(auth_token=TOKEN).is_available() is False
