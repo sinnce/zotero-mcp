@@ -429,7 +429,7 @@ class BridgeClient:
                 message="Candidate URL has no allowed domain",
             )
         request_id = request.request_id
-        if not _is_uuid(request_id):
+        if not isinstance(request_id, str) or not _is_uuid(request_id):
             return self._unavailable_result("Invalid bridge request id")
         payload = {
             "contract_version": request.contract_version,
