@@ -1,9 +1,9 @@
 from __future__ import annotations
 
+import ipaddress
 import os
 import re
 import uuid
-import ipaddress
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Final, Literal
