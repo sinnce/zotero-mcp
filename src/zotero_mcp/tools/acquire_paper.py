@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import shutil
 import tempfile
 from pathlib import Path
 from urllib.parse import urlparse
@@ -10,7 +11,11 @@ from fastmcp import Context
 
 from zotero_mcp._app import mcp
 from zotero_mcp.acquisition.async_bridge_client import AsyncBridgeClient as BridgeClient
-from zotero_mcp.acquisition.bridge_client import BridgeDownloadRequest, verify_bridge_artifact
+from zotero_mcp.acquisition.bridge_client import (
+    BridgeDownloadRequest,
+    snapshot_bridge_artifact,
+    verify_bridge_artifact,
+)
 from zotero_mcp.acquisition.config import load_acquisition_config
 from zotero_mcp.acquisition.download import ArtifactDownloader
 from zotero_mcp.acquisition.ingest import ingest_paper
@@ -100,18 +105,40 @@ def _is_explicit_libproxy_url(config, location) -> bool:
     return bool(candidate.netloc and candidate.netloc == libproxy.netloc)
 
 
-async def _bridge_artifact_failure(result) -> dict | None:
-    # Fail closed before reporting or ingesting a bridge artifact whose staged
-    # bytes do not match the bridge-declared sha256 and size_bytes.
-    error_code = await asyncio.to_thread(verify_bridge_artifact, result)
-    if error_code is None:
-        return None
+def _bridge_artifact_failure(error_code: str) -> dict:
     logger.warning("bridge artifact rejected [%s]", error_code)
     return {
         "status": "failed",
         "error_code": error_code,
         "message": f"[{error_code}] Bridge artifact failed integrity verification",
     }
+
+
+async def _complete_bridge_download(
+    ctx, resolution, identifier: str, result, session_name: str, access_source: str, message: str, auto_ingest: bool
+) -> dict:
+    # Fail closed before reporting or ingesting a bridge artifact whose staged
+    # bytes do not match the bridge-declared sha256 and size_bytes.
+    if not auto_ingest:
+        error_code = await asyncio.to_thread(verify_bridge_artifact, result)
+        if error_code is not None:
+            return _bridge_artifact_failure(error_code)
+        return _build_bridge_output(result, session_name, access_source, message)
+
+    # The staged path stays writable by the bridge, so ingest reads a private
+    # snapshot whose bytes are exactly the ones that were hashed.
+    snapshot_dir = tempfile.mkdtemp(prefix="zotero-mcp-bridge-verified-")
+    try:
+        error_code, snapshot_path = await asyncio.to_thread(snapshot_bridge_artifact, result, snapshot_dir)
+        if error_code is not None:
+            return _bridge_artifact_failure(error_code)
+        out = _build_bridge_output(result, session_name, access_source, message)
+        item_key = _run_auto_ingest(ctx, resolution, snapshot_path, identifier)
+        if item_key:
+            out["zotero_item_key"] = item_key
+        return out
+    finally:
+        shutil.rmtree(snapshot_dir, ignore_errors=True)
 
 
 def _build_bridge_output(result, session_name: str, access_source: str, message: str) -> dict:
@@ -157,20 +184,16 @@ async def acquire_paper(
                     )
                 )
                 if direct_result.status == "complete" and direct_result.file_path:
-                    failure = await _bridge_artifact_failure(direct_result)
-                    if failure is not None:
-                        return failure
-                    out = _build_bridge_output(
+                    return await _complete_bridge_download(
+                        ctx,
+                        resolution,
+                        identifier,
                         direct_result,
                         session_name,
                         access_source="direct",
                         message="Downloaded via direct browser access",
+                        auto_ingest=effective_auto_ingest,
                     )
-                    if effective_auto_ingest:
-                        item_key = _run_auto_ingest(ctx, resolution, direct_result.file_path, identifier)
-                        if item_key:
-                            out["zotero_item_key"] = item_key
-                    return out
 
                 if _is_explicit_paywall(direct_result):
                     result = await bridge.download(
@@ -192,20 +215,16 @@ async def acquire_paper(
                 )
 
             if result and result.status == "complete" and result.file_path:
-                failure = await _bridge_artifact_failure(result)
-                if failure is not None:
-                    return failure
-                out = _build_bridge_output(
+                return await _complete_bridge_download(
+                    ctx,
+                    resolution,
+                    identifier,
                     result,
                     session_name,
                     access_source="institutional",
                     message=f"Downloaded via bridge session '{session_name}'",
+                    auto_ingest=effective_auto_ingest,
                 )
-                if effective_auto_ingest:
-                    item_key = _run_auto_ingest(ctx, resolution, result.file_path, identifier)
-                    if item_key:
-                        out["zotero_item_key"] = item_key
-                return out
             if result and _is_terminal_bridge_result(result):
                 return {
                     "status": "failed",

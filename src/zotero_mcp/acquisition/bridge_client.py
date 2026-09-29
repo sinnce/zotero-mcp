@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import hmac
 import ipaddress
@@ -9,6 +10,7 @@ import stat
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import Final, Literal
 from urllib.parse import parse_qsl, urlparse
 
@@ -276,6 +278,25 @@ def verify_bridge_artifact(result: BridgeDownloadResult) -> str | None:
     whose byte length equals ``size_bytes`` and whose SHA-256 equals
     ``sha256``; otherwise returns a distinct ``ARTIFACT_*`` error code.
     """
+    error_code, _ = _check_bridge_artifact(result, None)
+    return error_code
+
+
+def snapshot_bridge_artifact(
+    result: BridgeDownloadResult, dest_dir: str | os.PathLike[str]
+) -> tuple[str | None, Path | None]:
+    """Verify a staged bridge artifact while copying it into ``dest_dir``.
+
+    The staged path stays owned by the bridge and can be replaced after any
+    separate check, so consumers must read the returned snapshot: its bytes
+    are exactly the bytes that were hashed. ``dest_dir`` must be a private
+    directory owned by the caller. Returns ``(None, snapshot_path)`` on
+    success, or ``(error_code, None)`` with no snapshot left behind.
+    """
+    return _check_bridge_artifact(result, Path(dest_dir))
+
+
+def _check_bridge_artifact(result: BridgeDownloadResult, dest_dir: Path | None) -> tuple[str | None, Path | None]:
     file_path = result.file_path
     declared_sha256 = result.sha256
     declared_size = result.size_bytes
@@ -290,24 +311,26 @@ def verify_bridge_artifact(result: BridgeDownloadResult) -> str | None:
         or not isinstance(declared_size, int)
         or not 1 <= declared_size <= _MAX_ARTIFACT_BYTES
     ):
-        return ARTIFACT_UNVERIFIABLE
+        return ARTIFACT_UNVERIFIABLE, None
     try:
         link_stat = os.lstat(file_path)
     except FileNotFoundError:
-        return ARTIFACT_MISSING
+        return ARTIFACT_MISSING, None
     except OSError:
-        return ARTIFACT_UNREADABLE
+        return ARTIFACT_UNREADABLE, None
     if not stat.S_ISREG(link_stat.st_mode):
-        return ARTIFACT_NOT_REGULAR
+        return ARTIFACT_NOT_REGULAR, None
     # O_NOFOLLOW rejects a symlink swapped in after lstat; O_NONBLOCK keeps a
     # swapped-in FIFO from blocking the open.
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_CLOEXEC", 0)
     try:
         fd = os.open(file_path, flags)
     except FileNotFoundError:
-        return ARTIFACT_MISSING
+        return ARTIFACT_MISSING, None
     except OSError:
-        return ARTIFACT_NOT_REGULAR
+        return ARTIFACT_NOT_REGULAR, None
+    snapshot_path: Path | None = None
+    error_code: str | None = None
     digest = hashlib.sha256()
     total = 0
     try:
@@ -317,21 +340,45 @@ def verify_bridge_artifact(result: BridgeDownloadResult) -> str | None:
                 link_stat.st_dev,
                 link_stat.st_ino,
             ):
-                return ARTIFACT_NOT_REGULAR
+                return ARTIFACT_NOT_REGULAR, None
             if opened_stat.st_size != declared_size:
-                return ARTIFACT_SIZE_MISMATCH
-            while chunk := handle.read(_ARTIFACT_READ_CHUNK):
-                total += len(chunk)
-                if total > declared_size:
-                    return ARTIFACT_SIZE_MISMATCH
-                digest.update(chunk)
+                return ARTIFACT_SIZE_MISMATCH, None
+            sink = None
+            if dest_dir is not None:
+                target = dest_dir / _snapshot_name(file_path)
+                sink_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+                sink = os.fdopen(os.open(target, sink_flags | getattr(os, "O_CLOEXEC", 0), 0o600), "wb")
+                snapshot_path = target
+            try:
+                while chunk := handle.read(_ARTIFACT_READ_CHUNK):
+                    total += len(chunk)
+                    if total > declared_size:
+                        error_code = ARTIFACT_SIZE_MISMATCH
+                        break
+                    digest.update(chunk)
+                    if sink is not None:
+                        sink.write(chunk)
+            finally:
+                if sink is not None:
+                    sink.close()
     except OSError:
-        return ARTIFACT_UNREADABLE
-    if total != declared_size:
-        return ARTIFACT_SIZE_MISMATCH
-    if not hmac.compare_digest(digest.hexdigest(), declared_sha256):
-        return ARTIFACT_HASH_MISMATCH
-    return None
+        error_code = ARTIFACT_UNREADABLE
+    if error_code is None and total != declared_size:
+        error_code = ARTIFACT_SIZE_MISMATCH
+    if error_code is None and not hmac.compare_digest(digest.hexdigest(), declared_sha256):
+        error_code = ARTIFACT_HASH_MISMATCH
+    if error_code is not None:
+        if snapshot_path is not None:
+            with contextlib.suppress(FileNotFoundError):
+                os.unlink(snapshot_path)
+        return error_code, None
+    return None, snapshot_path
+
+
+def _snapshot_name(file_path: str) -> str:
+    # Keep the staged basename: ingest uses it as the attachment filename.
+    name = os.path.basename(file_path)
+    return name if name not in ("", ".", "..") else "artifact"
 
 
 class BridgeClient:
