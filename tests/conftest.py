@@ -1,6 +1,10 @@
 """Shared test fixtures for Zotero MCP tests."""
 
+import hashlib
+
 import pytest
+
+from zotero_mcp.acquisition.bridge_client import BridgeDownloadResult
 
 
 class DummyContext:
@@ -147,3 +151,22 @@ def dummy_ctx():
 @pytest.fixture
 def fake_zot():
     return FakeZotero()
+
+
+@pytest.fixture
+def bridge_artifact(tmp_path):
+    """Stage a real file and return a complete bridge result that declares it."""
+
+    def _make(name="paper.pdf", content=b"%PDF-1.7 staged bridge artifact\n"):
+        path = tmp_path / name
+        path.write_bytes(content)
+        return BridgeDownloadResult(
+            status="complete",
+            auth_state="ready",
+            file_path=str(path),
+            sha256=hashlib.sha256(content).hexdigest(),
+            size_bytes=len(content),
+            content_type="application/pdf",
+        )
+
+    return _make

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import tempfile
 from pathlib import Path
@@ -9,7 +10,7 @@ from fastmcp import Context
 
 from zotero_mcp._app import mcp
 from zotero_mcp.acquisition.async_bridge_client import AsyncBridgeClient as BridgeClient
-from zotero_mcp.acquisition.bridge_client import BridgeDownloadRequest
+from zotero_mcp.acquisition.bridge_client import BridgeDownloadRequest, verify_bridge_artifact
 from zotero_mcp.acquisition.config import load_acquisition_config
 from zotero_mcp.acquisition.download import ArtifactDownloader
 from zotero_mcp.acquisition.ingest import ingest_paper
@@ -99,6 +100,20 @@ def _is_explicit_libproxy_url(config, location) -> bool:
     return bool(candidate.netloc and candidate.netloc == libproxy.netloc)
 
 
+async def _bridge_artifact_failure(result) -> dict | None:
+    # Fail closed before reporting or ingesting a bridge artifact whose staged
+    # bytes do not match the bridge-declared sha256 and size_bytes.
+    error_code = await asyncio.to_thread(verify_bridge_artifact, result)
+    if error_code is None:
+        return None
+    logger.warning("bridge artifact rejected [%s]", error_code)
+    return {
+        "status": "failed",
+        "error_code": error_code,
+        "message": f"[{error_code}] Bridge artifact failed integrity verification",
+    }
+
+
 def _build_bridge_output(result, session_name: str, access_source: str, message: str) -> dict:
     return {
         "status": "complete",
@@ -142,6 +157,9 @@ async def acquire_paper(
                     )
                 )
                 if direct_result.status == "complete" and direct_result.file_path:
+                    failure = await _bridge_artifact_failure(direct_result)
+                    if failure is not None:
+                        return failure
                     out = _build_bridge_output(
                         direct_result,
                         session_name,
@@ -174,6 +192,9 @@ async def acquire_paper(
                 )
 
             if result and result.status == "complete" and result.file_path:
+                failure = await _bridge_artifact_failure(result)
+                if failure is not None:
+                    return failure
                 out = _build_bridge_output(
                     result,
                     session_name,

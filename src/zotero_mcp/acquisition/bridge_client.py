@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
 import ipaddress
 import os
 import re
+import stat
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
@@ -19,6 +22,16 @@ _MAX_DOMAIN_LENGTH = 253
 _MAX_NESTED_URL_DEPTH = 2
 _MAX_FILE_PATH_LENGTH = 4096
 _MAX_ARTIFACT_BYTES = 100 * 1024 * 1024
+_ARTIFACT_READ_CHUNK = 1024 * 1024
+
+# Client-side integrity failures for a staged bridge artifact. They are not
+# bridge wire codes: the client emits them after re-reading the staged file.
+ARTIFACT_UNVERIFIABLE = "ARTIFACT_UNVERIFIABLE"
+ARTIFACT_MISSING = "ARTIFACT_MISSING"
+ARTIFACT_NOT_REGULAR = "ARTIFACT_NOT_REGULAR"
+ARTIFACT_UNREADABLE = "ARTIFACT_UNREADABLE"
+ARTIFACT_SIZE_MISMATCH = "ARTIFACT_SIZE_MISMATCH"
+ARTIFACT_HASH_MISMATCH = "ARTIFACT_HASH_MISMATCH"
 
 BridgeStatus = Literal["complete", "failed", "auth_required"]
 BridgeAuthState = Literal[
@@ -254,6 +267,71 @@ def _is_datetime(value: object) -> bool:
     except ValueError:
         return False
     return True
+
+
+def verify_bridge_artifact(result: BridgeDownloadResult) -> str | None:
+    """Re-hash a staged bridge artifact against its declared identity.
+
+    Returns ``None`` only when ``file_path`` names a regular, non-symlink file
+    whose byte length equals ``size_bytes`` and whose SHA-256 equals
+    ``sha256``; otherwise returns a distinct ``ARTIFACT_*`` error code.
+    """
+    file_path = result.file_path
+    declared_sha256 = result.sha256
+    declared_size = result.size_bytes
+    if (
+        not isinstance(file_path, str)
+        or not file_path.startswith("/")
+        or "\0" in file_path
+        or len(file_path) > _MAX_FILE_PATH_LENGTH
+        or not isinstance(declared_sha256, str)
+        or not re.fullmatch(r"[0-9a-f]{64}", declared_sha256)
+        or isinstance(declared_size, bool)
+        or not isinstance(declared_size, int)
+        or not 1 <= declared_size <= _MAX_ARTIFACT_BYTES
+    ):
+        return ARTIFACT_UNVERIFIABLE
+    try:
+        link_stat = os.lstat(file_path)
+    except FileNotFoundError:
+        return ARTIFACT_MISSING
+    except OSError:
+        return ARTIFACT_UNREADABLE
+    if not stat.S_ISREG(link_stat.st_mode):
+        return ARTIFACT_NOT_REGULAR
+    # O_NOFOLLOW rejects a symlink swapped in after lstat; O_NONBLOCK keeps a
+    # swapped-in FIFO from blocking the open.
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_CLOEXEC", 0)
+    try:
+        fd = os.open(file_path, flags)
+    except FileNotFoundError:
+        return ARTIFACT_MISSING
+    except OSError:
+        return ARTIFACT_NOT_REGULAR
+    digest = hashlib.sha256()
+    total = 0
+    try:
+        with os.fdopen(fd, "rb") as handle:
+            opened_stat = os.fstat(handle.fileno())
+            if not stat.S_ISREG(opened_stat.st_mode) or (opened_stat.st_dev, opened_stat.st_ino) != (
+                link_stat.st_dev,
+                link_stat.st_ino,
+            ):
+                return ARTIFACT_NOT_REGULAR
+            if opened_stat.st_size != declared_size:
+                return ARTIFACT_SIZE_MISMATCH
+            while chunk := handle.read(_ARTIFACT_READ_CHUNK):
+                total += len(chunk)
+                if total > declared_size:
+                    return ARTIFACT_SIZE_MISMATCH
+                digest.update(chunk)
+    except OSError:
+        return ARTIFACT_UNREADABLE
+    if total != declared_size:
+        return ARTIFACT_SIZE_MISMATCH
+    if not hmac.compare_digest(digest.hexdigest(), declared_sha256):
+        return ARTIFACT_HASH_MISMATCH
+    return None
 
 
 class BridgeClient:

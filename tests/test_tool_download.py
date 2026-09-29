@@ -2,7 +2,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from zotero_mcp.acquisition.bridge_client import BridgeDownloadResult
 from zotero_mcp.acquisition.types import AccessLocation, AccessResolution, ArtifactDownload, PipelineError
 from zotero_mcp.tools.download_paper_artifact import download_paper_artifact
 
@@ -88,13 +87,9 @@ class TestBridgeFallback:
             best_location=loc,
         )
 
-    async def test_bridge_fallback_triggered(self, tmp_path):
+    async def test_bridge_fallback_triggered(self, bridge_artifact):
         resolution = self._make_resolution(requires_session=True)
-        bridge_result = BridgeDownloadResult(
-            status="complete",
-            auth_state="ready",
-            file_path=str(tmp_path / "paper.pdf"),
-        )
+        bridge_result = bridge_artifact("paper.pdf")
 
         with (
             patch("zotero_mcp.tools.acquire_paper.resolve_access", new=AsyncMock(return_value=resolution)),

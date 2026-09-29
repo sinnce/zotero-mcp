@@ -244,7 +244,7 @@ class TestAcquireIngest:
         assert "zotero_item_key" not in result
         mock_ingest.assert_not_called()
 
-    async def test_direct_browser_access_precedes_libproxy_fallback(self, mock_ctx):
+    async def test_direct_browser_access_precedes_libproxy_fallback(self, mock_ctx, bridge_artifact):
         resolution = make_resolution(metadata={"title": "Campus Access"}, requires_session=True)
         resolution.best_location.url = "https://libproxy.snu.ac.kr/link.n2s?url=https%3A%2F%2Fdoi.org%2F10.1234%2Ftest"
         resolution.best_location.session_kind = "libproxy"
@@ -257,11 +257,7 @@ class TestAcquireIngest:
             )
         )
 
-        direct_result = BridgeDownloadResult(
-            status="complete",
-            auth_state="ready",
-            file_path="/tmp/direct.pdf",
-        )
+        direct_result = bridge_artifact("direct.pdf")
 
         with (
             patch("zotero_mcp.tools.acquire_paper.load_acquisition_config", return_value=config),
@@ -282,7 +278,7 @@ class TestAcquireIngest:
         direct_request = mock_bridge.download.call_args[0][0]
         assert direct_request.candidate_url == "https://doi.org/10.1234/test"
 
-    async def test_libproxy_fallback_only_after_explicit_paywall(self, mock_ctx):
+    async def test_libproxy_fallback_only_after_explicit_paywall(self, mock_ctx, bridge_artifact):
         resolution = make_resolution(metadata={"title": "Fallback Access"}, requires_session=True)
         resolution.best_location.url = "https://libproxy.snu.ac.kr/link.n2s?url=https%3A%2F%2Fdoi.org%2F10.1234%2Ftest"
         resolution.best_location.session_kind = "libproxy"
@@ -301,11 +297,7 @@ class TestAcquireIngest:
             error_code="AUTH_REQUIRED",
             message="Login form detected",
         )
-        proxy_result = BridgeDownloadResult(
-            status="complete",
-            auth_state="ready",
-            file_path="/tmp/proxy.pdf",
-        )
+        proxy_result = bridge_artifact("proxy.pdf")
 
         with (
             patch("zotero_mcp.tools.acquire_paper.load_acquisition_config", return_value=config),
@@ -327,7 +319,7 @@ class TestAcquireIngest:
         assert first_request.candidate_url == "https://doi.org/10.1234/test"
         assert second_request.candidate_url == resolution.best_location.url
 
-    async def test_domain_blocked_direct_browser_access_falls_back_to_libproxy(self, mock_ctx):
+    async def test_domain_blocked_direct_browser_access_falls_back_to_libproxy(self, mock_ctx, bridge_artifact):
         resolution = make_resolution(metadata={"title": "Blocked Direct Access"}, requires_session=True)
         resolution.best_location.url = "https://libproxy.snu.ac.kr/link.n2s?url=https%3A%2F%2Fdoi.org%2F10.1234%2Ftest"
         resolution.best_location.session_kind = "libproxy"
@@ -344,7 +336,7 @@ class TestAcquireIngest:
             error_code="DOMAIN_BLOCKED",
             message="Candidate domain denied",
         )
-        proxy_result = BridgeDownloadResult(status="complete", auth_state="ready", file_path="/tmp/proxy.pdf")
+        proxy_result = bridge_artifact("proxy.pdf")
 
         with (
             patch("zotero_mcp.tools.acquire_paper.load_acquisition_config", return_value=config),
@@ -362,7 +354,7 @@ class TestAcquireIngest:
         assert result["provenance"]["access_source"] == "institutional"
         assert mock_bridge.download.call_count == 2
 
-    async def test_explicit_libproxy_url_uses_bridge_with_session_name(self, mock_ctx):
+    async def test_explicit_libproxy_url_uses_bridge_with_session_name(self, mock_ctx, bridge_artifact):
         resolution = make_resolution(identifier_type="url")
         resolution.best_location.url = "https://libproxy.snu.ac.kr/link.n2s?url=https%3A%2F%2Fexample.com%2Fpaper"
         resolution.best_location.access_method = "direct"
@@ -376,11 +368,7 @@ class TestAcquireIngest:
             )
         )
 
-        bridge_result = BridgeDownloadResult(
-            status="complete",
-            auth_state="ready",
-            file_path="/tmp/libproxy-url.pdf",
-        )
+        bridge_result = bridge_artifact("libproxy-url.pdf")
 
         with (
             patch("zotero_mcp.tools.acquire_paper.load_acquisition_config", return_value=config),
