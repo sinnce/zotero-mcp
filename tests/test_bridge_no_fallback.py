@@ -169,6 +169,44 @@ async def test_configured_bridge_without_usable_auth_is_terminal(monkeypatch, do
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "bridge_url",
+    [
+        pytest.param("http://127.0.0.1:98x0", id="non-numeric-port"),
+        pytest.param("http://xn--zz.example:9870", id="undecodable-idna-host"),
+        pytest.param("http://a..b:9870", id="empty-label"),
+        pytest.param("http://bad\nhost:9870", id="control-character"),
+        pytest.param("127.0.0.1:9870", id="missing-scheme"),
+        pytest.param("ftp://127.0.0.1:9870", id="unsupported-scheme"),
+        pytest.param("http://", id="missing-host"),
+        pytest.param("http://127.0.0.1:99999", id="port-out-of-range"),
+        pytest.param("http://127.0.0.1:0", id="port-zero"),
+        pytest.param("http://[bad:9870", id="unbalanced-bracket"),
+        pytest.param("http://bad host:9870", id="space-in-host"),
+        pytest.param("http://user:pass@127.0.0.1:9870", id="userinfo"),
+        pytest.param("http://127.0.0.1:9870/?x=1", id="query"),
+        pytest.param("http://127.0.0.1:9870/#x", id="fragment"),
+    ],
+)
+async def test_configured_bridge_malformed_url_is_terminal(monkeypatch, downloader, bridge_url):
+    # The real httpx transport is kept (wrapped, not replaced) so a URL httpx
+    # itself refuses cannot escape as an exception instead of a terminal code.
+    monkeypatch.setenv("BRIDGE_SERVER_URL", bridge_url)
+    monkeypatch.setenv("ZOTERO_BRIDGE_TOKEN", TOKEN)
+    with (
+        patch(f"{TOOL}.load_acquisition_config", return_value=AcquisitionConfig()),
+        patch(f"{TOOL}.resolve_access", new=AsyncMock(return_value=_resolution())),
+        patch(f"{CLIENT}.httpx.get", wraps=httpx.get) as http_get,
+        patch(f"{CLIENT}.httpx.post", wraps=httpx.post) as http_post,
+    ):
+        result = await acquire_paper("10.1000/example", session_name="campus")
+
+    _assert_terminal(result, "BRIDGE_URL_INVALID", downloader)
+    http_get.assert_not_called()
+    http_post.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_configured_bridge_without_session_is_terminal(configured_bridge, downloader):
     result, http_get, http_post = await _acquire(session_name=None)
 
@@ -196,6 +234,26 @@ async def test_configured_bridge_without_session_is_terminal(configured_bridge, 
             _echoing_post(_server_error("INTERNAL_ERROR", 500, "Internal bridge failure.")),
             "INTERNAL_ERROR",
             id="internal-error",
+        ),
+        pytest.param(
+            _echoing_post(_server_error("SESSION_UNKNOWN", 422, "Unknown browser session.", "missing")),
+            "SESSION_UNKNOWN",
+            id="session-unknown",
+        ),
+        pytest.param(
+            _echoing_post(_server_error("ADDRESS_BLOCKED", 422, "Destination address is blocked.")),
+            "ADDRESS_BLOCKED",
+            id="address-blocked",
+        ),
+        pytest.param(
+            _echoing_post(_server_error("DESTINATION_UNRESOLVED", 422, "Destination could not be resolved.")),
+            "DESTINATION_UNRESOLVED",
+            id="destination-unresolved",
+        ),
+        pytest.param(
+            _echoing_post(_server_error("TIMEOUT", 504, "Request deadline exceeded.")),
+            "TIMEOUT",
+            id="server-timeout",
         ),
     ],
 )

@@ -296,3 +296,62 @@ def test_not_ready_health_is_not_available_even_with_valid_json():
 def test_health_fails_closed_for_invalid_readiness(response):
     with patch("zotero_mcp.acquisition.bridge_client.httpx.get", return_value=response):
         assert BridgeClient(auth_token=TOKEN).is_available() is False
+
+
+# URLs that the real httpx refuses while building the request, one per
+# exception family: InvalidURL, UnsupportedProtocol and idna.IDNAError.
+_HTTPX_REFUSED_URLS = [
+    pytest.param("http://127.0.0.1:98x0", id="invalid-url"),
+    pytest.param("ftp://127.0.0.1:9870", id="unsupported-protocol"),
+    pytest.param("http://xn--zz.example", id="idna-error"),
+]
+
+
+@pytest.mark.parametrize("bridge_url", _HTTPX_REFUSED_URLS)
+def test_malformed_bridge_url_health_is_terminal_code(bridge_url):
+    health = BridgeClient(base_url=bridge_url, auth_token=TOKEN).health()
+
+    assert health.available is False
+    assert health.status == "invalid_url"
+    assert health.error_code == "BRIDGE_URL_INVALID"
+
+
+@pytest.mark.parametrize("bridge_url", _HTTPX_REFUSED_URLS)
+def test_malformed_bridge_url_download_is_terminal_code(bridge_url):
+    result = BridgeClient(base_url=bridge_url, auth_token=TOKEN).download(_request())
+
+    assert result.status == "failed"
+    assert result.error_code == "BRIDGE_URL_INVALID"
+    assert result.request_id is None
+
+
+@pytest.mark.parametrize("bridge_url", _HTTPX_REFUSED_URLS)
+def test_httpx_url_errors_at_transport_stay_terminal(bridge_url):
+    # Even a URL the pre-transport check let through must not escape httpx
+    # as an exception: the real transport refuses it and the code is terminal.
+    client = BridgeClient(base_url=bridge_url, auth_token=TOKEN)
+    client._base_url_valid = True
+
+    assert client.health().error_code == "BRIDGE_URL_INVALID"
+    assert client.download(_request()).error_code == "BRIDGE_URL_INVALID"
+
+
+@pytest.mark.parametrize(
+    "bridge_url",
+    [
+        "http://127.0.0.1:9870",
+        "http://127.0.0.1:9870/",
+        "http://localhost:9870",
+        "http://[::1]:9870",
+        "https://bridge.example",
+        "HTTP://Bridge.Example:65535",
+    ],
+)
+def test_well_formed_bridge_url_reaches_transport(bridge_url):
+    with patch(
+        "zotero_mcp.acquisition.bridge_client.httpx.get", return_value=_response(200, _health("ready"))
+    ) as http_get:
+        health = BridgeClient(base_url=bridge_url, auth_token=TOKEN).health()
+
+    assert health.available is True
+    http_get.assert_called_once()

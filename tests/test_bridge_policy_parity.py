@@ -1,13 +1,15 @@
 """Rule-by-rule parity of the client bridge policy with the 2.0.0 server.
 
-Every row names the code the server returns (``server``) and the code the
-client produces (``client``). They are equal except where a row is marked
-as a client-only guard or as the documented IDNA divergence; in those rows
-the client refuses something the server would accept, never the reverse.
+Every request row names the one code both the server and the client return:
+there is no divergent request row, including hosts that need UTS #46 (the
+client mirrors Bun's ICU ToASCII in ``bridge_idna``). Response rows name the
+server verdict and the client verdict; they differ only in rows marked as a
+client-only guard, where the client refuses something the server accepts.
 The ``server`` column was checked against the server code itself
 (``bridge-v2-policy.ts``, ``bridge-v2-contract.ts``, ``bridge-server.ts``).
 """
 
+import json
 from unittest.mock import Mock, patch
 
 import httpx
@@ -42,13 +44,43 @@ def _payload(**overrides) -> dict:
     return payload
 
 
-def _row(rule, server, client=None, **overrides):
-    return pytest.param(_payload(**overrides), server, client or server, id=rule)
+def _row(rule, code, **overrides):
+    return pytest.param(_payload(**overrides), code, id=rule)
 
 
-# (payload, server code, client code). ACCEPT: the request passes every check
-# before the session registry and is sent.
+def _wire_size(payload: dict) -> int:
+    # The bytes httpx sends for json=payload.
+    return len(json.dumps(payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8"))
+
+
+def _sized(field: str, total: int, unit: str = "a") -> str:
+    # A value for ``field`` that makes the encoded payload exactly ``total``
+    # bytes: as many ``unit`` as fit, then ASCII padding.
+    free = total - _wire_size(_payload(**{field: ""}))
+    count = free // len(unit.encode("utf-8"))
+    return unit * count + "a" * (free - count * len(unit.encode("utf-8")))
+
+
+# (payload, code): the code the server returns and the client must return.
+# ACCEPT: the request passes every check before the session registry and is
+# sent.
 REQUEST_ROWS = [
+    # Declared Content-Length and bounded body read (bridge-server.ts:154-170),
+    # before JSON.parse and every payload check. The limit is 16384 bytes.
+    _row("body-16384-bytes-not-too-large", "INVALID_REQUEST", session_name=_sized("session_name", 16384)),
+    _row("body-16385-bytes", "REQUEST_TOO_LARGE", session_name=_sized("session_name", 16385)),
+    _row("body-multibyte-16385-bytes", "REQUEST_TOO_LARGE", doi=_sized("doi", 16385, "\U0001f600")),
+    _row(
+        "body-json-escapes-count",
+        "REQUEST_TOO_LARGE",
+        doi="\n" * ((16385 - _wire_size(_payload(doi=""))) // 2 + 1),
+    ),
+    _row(
+        "order-size-before-version",
+        "REQUEST_TOO_LARGE",
+        contract_version="1.0.0",
+        session_name=_sized("session_name", 16385),
+    ),
     # classifyVersion (bridge-server.ts), before the schema.
     _row("version-legacy-three-part", "LEGACY_DISABLED", contract_version="1.0.0"),
     _row("version-legacy-two-part", "LEGACY_DISABLED", contract_version="1.2"),
@@ -132,21 +164,60 @@ REQUEST_ROWS = [
     _row("host-idna-not-allowlisted", "DOMAIN_BLOCKED", candidate_url="https://caf%C3%A9.example/paper.pdf"),
     _row("host-punycode-empty", "INVALID_REQUEST", candidate_url="https://xn--.example/paper.pdf"),
     _row("host-punycode-all-ascii", "INVALID_REQUEST", candidate_url="https://xn--abc-.example/paper.pdf"),
-    # Documented divergence: hosts that need UTS #46 are refused by the client.
+    # UTS #46 ToASCII of the candidate host (WebKit URL parser + ICU 75.1,
+    # non-transitional, CheckBidi, CheckJoiners, no STD3 rules).
     _row(
-        "idna-divergence-punycode-host",
+        "idna-punycode-host-allowlisted",
         ACCEPT,
-        "DOMAIN_BLOCKED",
         candidate_url="https://xn--caf-dma.example/paper.pdf",
         allowed_domains=["xn--caf-dma.example"],
     ),
     _row(
-        "idna-divergence-percent-encoded-host",
+        "idna-percent-encoded-host-allowlisted",
         ACCEPT,
-        "DOMAIN_BLOCKED",
         candidate_url="https://caf%C3%A9.example/paper.pdf",
         allowed_domains=["xn--caf-dma.example"],
     ),
+    _row("idna-uppercase-ace-prefix", ACCEPT, candidate_url="https://XN--CAF-DMA.publisher.example/paper.pdf"),
+    _row("idna-mapped-fullwidth", ACCEPT, candidate_url="https://%EF%BD%90ublisher.example/paper.pdf"),
+    _row("idna-ignored-soft-hyphen", ACCEPT, candidate_url="https://pub%C2%ADlisher.example/paper.pdf"),
+    _row(
+        "idna-deviation-nontransitional",
+        ACCEPT,
+        candidate_url="https://stra%C3%9Fe.example/paper.pdf",
+        allowed_domains=["xn--strae-oqa.example"],
+    ),
+    _row(
+        "idna-deviation-not-transitional",
+        "DOMAIN_BLOCKED",
+        candidate_url="https://stra%C3%9Fe.example/paper.pdf",
+        allowed_domains=["strasse.example"],
+    ),
+    _row("idna-undecodable-punycode", "INVALID_REQUEST", candidate_url="https://xn--zz.publisher.example/paper.pdf"),
+    _row("idna-disallowed-code-point", "INVALID_REQUEST", candidate_url="https://a%E2%80%A8b.publisher.example/p"),
+    _row("idna-leading-combining-mark", "INVALID_REQUEST", candidate_url="https://%CC%81a.publisher.example/p"),
+    _row("idna-bidi-rule", "INVALID_REQUEST", candidate_url="https://1%D7%90.publisher.example/paper.pdf"),
+    _row("idna-contextj-zwj", "INVALID_REQUEST", candidate_url="https://a%E2%80%8Db.publisher.example/p"),
+    # Fuzz-found orders: a host ToASCII refuses is a parse failure, which
+    # comes before the scheme, userinfo and host checks.
+    _row("order-idna-before-scheme", "INVALID_REQUEST", candidate_url="http://xn--zz.publisher.example/paper.pdf"),
+    _row("order-idna-before-userinfo", "INVALID_REQUEST", candidate_url="https://u@xn--zz.publisher.example/p"),
+    _row("order-idna-before-host-policy", "INVALID_REQUEST", candidate_url="https://xn--zz.1/paper.pdf"),
+    # Found by the differential fuzz against the server (r6/oracle): each one
+    # got a different code from the pre-UTS #46 client.
+    _row("fuzz-ace-label-valid", ACCEPT, candidate_url="https://xn--xfmpk.publisher.example/p"),
+    _row("fuzz-ace-label-with-basic-part", ACCEPT, candidate_url="https://xn--e5n8-2rm.publisher.example/p"),
+    _row("fuzz-percent-encoded-latin", ACCEPT, candidate_url="https://%C7%A9.publisher.example/p"),
+    _row("fuzz-ace-label-refused", "INVALID_REQUEST", candidate_url="https://xn--kh8b190r.publisher.example/p"),
+    _row("fuzz-ace-label-refused-2", "INVALID_REQUEST", candidate_url="https://xn--b05g.publisher.example/p"),
+    _row(
+        "fuzz-percent-encoded-rtl-single-label",
+        "INVALID_REQUEST",
+        candidate_url="https://a%DE%BF%44",
+        allowed_domains=["publisher.example", "example"],
+    ),
+    _row("fuzz-order-ace-before-scheme", "INVALID_REQUEST", candidate_url="http://xn--0an.publisher.example/p"),
+    _row("fuzz-order-ace-before-scheme-2", "INVALID_REQUEST", candidate_url="http://xn--euboxw.publisher.example/p"),
     # normalizeAllowedDomains (bridge-v2-policy.ts:34-60).
     _row("allowlist-entry-ip", "DOMAIN_BLOCKED", allowed_domains=["publisher.example", "127.0.0.1"]),
     _row("allowlist-entry-single-label", "DOMAIN_BLOCKED", allowed_domains=["publisher.example", "example"]),
@@ -243,28 +314,30 @@ def _request_from(payload: dict) -> BridgeDownloadRequest:
     )
 
 
-@pytest.mark.parametrize(("payload", "server_code", "client_code"), REQUEST_ROWS)
-def test_request_policy_matches_server(payload, server_code, client_code):
+@pytest.mark.parametrize(("payload", "server_code"), REQUEST_ROWS)
+def test_request_policy_matches_server(payload, server_code):
     with patch("zotero_mcp.acquisition.bridge_client.httpx.post", return_value=_accepted_response()) as post:
         result = BridgeClient(auth_token=TOKEN).download(_request_from(payload))
 
-    if client_code == ACCEPT:
+    if server_code == ACCEPT:
         post.assert_called_once()
         assert post.call_args.kwargs["json"]["doi"] == payload["doi"]
         assert post.call_args.kwargs["json"]["candidate_url"] == payload["candidate_url"]
     else:
         post.assert_not_called()
         assert result.status == "failed"
-        assert result.error_code == client_code
+        assert result.error_code == server_code
         assert result.request_id is None
 
 
-def test_request_rows_only_diverge_toward_refusal():
-    for row in REQUEST_ROWS:
-        _, server_code, client_code = row.values
-        if server_code != client_code:
-            assert server_code == ACCEPT and client_code == "DOMAIN_BLOCKED", row.id
-            assert row.id.startswith("idna-divergence"), row.id
+def test_size_rows_sit_on_the_server_limit():
+    # The size rows are only meaningful if their bodies straddle 16384 bytes.
+    sizes = {row.id: _wire_size(row.values[0]) for row in REQUEST_ROWS if "16384" in row.id or "16385" in row.id}
+    assert sizes == {
+        "body-16384-bytes-not-too-large": 16384,
+        "body-16385-bytes": 16385,
+        "body-multibyte-16385-bytes": 16385,
+    }
 
 
 def _success(**overrides) -> dict:
@@ -331,8 +404,10 @@ SUCCESS_ROWS = [
     # Client-only: the server only reports URLs it navigated within the
     # request allowlist; the client checks that as well.
     _srow("client-only-final-url-outside-allowlist", ACCEPT, REJECT, final_url="https://other.example/paper.pdf"),
-    # Documented divergence: hosts that need UTS #46.
-    _srow("idna-divergence-final-url", ACCEPT, REJECT, final_url="https://xn--caf-dma.publisher.example/paper.pdf"),
+    # UTS #46 ToASCII of the final_url host.
+    _srow("idna-final-url-punycode", ACCEPT, final_url="https://xn--caf-dma.publisher.example/paper.pdf"),
+    _srow("idna-final-url-percent-encoded", ACCEPT, final_url="https://caf%C3%A9.publisher.example/paper.pdf"),
+    _srow("idna-final-url-undecodable", REJECT, final_url="https://xn--zz.publisher.example/paper.pdf"),
     _srow("expires-at-without-seconds", ACCEPT, expires_at="2026-09-26T12:00Z"),
     _srow("expires-at-fraction", ACCEPT, expires_at="2026-09-26T12:00:00.123456Z"),
     _srow("expires-at-offset", REJECT, expires_at="2026-09-26T12:00:00+00:00"),
@@ -449,6 +524,79 @@ def test_error_schema_matches_server(body, http_status, server_verdict, client_c
         assert result.message == body["message"]
 
 
+# BRIDGE_ERROR_DETAILS (bridge-v2-contract.ts:60-134), copied from the server:
+# code -> (HTTP status, message, status, auth_state). Every code, including
+# the boundary codes the client never provokes (INVALID_JSON,
+# UNSUPPORTED_MEDIA_TYPE, ...) and the server-only checks (SESSION_UNKNOWN,
+# DESTINATION_UNRESOLVED, ADDRESS_BLOCKED, TIMEOUT), reaches the caller as
+# that code.
+SERVER_ERROR_CATALOG = {
+    "INVALID_JSON": (400, "Invalid JSON body.", "failed", "unchecked"),
+    "INVALID_REQUEST": (400, "Invalid request.", "failed", "unchecked"),
+    "UNSUPPORTED_CONTRACT_VERSION": (400, "Unsupported contract version.", "failed", "unchecked"),
+    "LEGACY_DISABLED": (400, "Legacy bridge protocol is disabled.", "failed", "unchecked"),
+    "UNAUTHORIZED": (401, "Authentication required.", "failed", "unchecked"),
+    "NOT_FOUND": (404, "Route not found.", "failed", "unchecked"),
+    "TRANSFER_NOT_FOUND": (404, "Transfer not found.", "failed", "unchecked"),
+    "NO_PDF": (404, "No PDF was found.", "failed", "unchecked"),
+    "ACCESS_DENIED": (403, "Destination denied access.", "failed", "unchecked"),
+    "METHOD_NOT_ALLOWED": (405, "Method not allowed.", "failed", "unchecked"),
+    "ACK_CONFLICT": (409, "Transfer acknowledgement conflicts.", "failed", "unchecked"),
+    "SESSION_BUSY": (409, "Browser session is busy.", "failed", "busy"),
+    "TRANSFER_EXPIRED": (410, "Transfer expired.", "failed", "unchecked"),
+    "REQUEST_TOO_LARGE": (413, "Request body too large.", "failed", "unchecked"),
+    "UNSUPPORTED_MEDIA_TYPE": (415, "Unsupported request encoding.", "failed", "unchecked"),
+    "SESSION_UNKNOWN": (422, "Unknown browser session.", "failed", "missing"),
+    "URL_SCHEME_BLOCKED": (422, "URL scheme is blocked.", "failed", "unchecked"),
+    "LEGACY_POLICY_UNRESOLVED": (422, "Legacy destination policy could not be resolved.", "failed", "unchecked"),
+    "DOMAIN_BLOCKED": (422, "Destination domain is blocked.", "failed", "unchecked"),
+    "DESTINATION_UNRESOLVED": (422, "Destination could not be resolved.", "failed", "unchecked"),
+    "ADDRESS_BLOCKED": (422, "Destination address is blocked.", "failed", "unchecked"),
+    "AUTH_EXPIRED": (428, "Browser authentication expired.", "auth_required", "expired"),
+    "AUTH_MISSING": (428, "Browser authentication is missing.", "auth_required", "missing"),
+    "INTERACTIVE_REQUIRED": (
+        428,
+        "Interactive browser authentication required.",
+        "auth_required",
+        "interactive_required",
+    ),
+    "CAPTCHA": (428, "Browser challenge requires interaction.", "auth_required", "interactive_required"),
+    "AUTH_REQUIRED": (428, "Browser authentication required.", "auth_required", "expired"),
+    "AUTH_AMBIGUOUS": (503, "Browser authentication state is ambiguous.", "failed", "ambiguous"),
+    "CAPABILITY_UNAVAILABLE": (503, "Browser interception is unavailable.", "failed", "unchecked"),
+    "TIMEOUT": (504, "Request deadline exceeded.", "failed", "unchecked"),
+    "INTERNAL_ERROR": (500, "Internal bridge failure.", "failed", "unchecked"),
+    "STORAGE_FAILURE": (500, "Artifact staging failed.", "failed", "unchecked"),
+    "HTML_LANDING": (502, "Destination returned an HTML landing page.", "failed", "unchecked"),
+    "INVALID_ARTIFACT": (502, "Downloaded artifact is invalid.", "failed", "unchecked"),
+}
+
+
+@pytest.mark.parametrize("code", sorted(SERVER_ERROR_CATALOG))
+def test_every_server_error_code_passes_through(code):
+    http_status, message, status, auth_state = SERVER_ERROR_CATALOG[code]
+    # UNAUTHORIZED is the one code whose request_id is always null (con:66-72).
+    request_id = None if code == "UNAUTHORIZED" else REQUEST_ID
+    body = _error(code, message, status=status, auth_state=auth_state, request_id=request_id)
+    response = Mock()
+    response.status_code = http_status
+    response.headers = {"content-type": "application/json; charset=utf-8"}
+    response.json.return_value = body
+    request = BridgeDownloadRequest(
+        "10.1000/example", "https://publisher.example/paper.pdf", "campus", request_id=REQUEST_ID
+    )
+    with patch("zotero_mcp.acquisition.bridge_client.httpx.post", return_value=response):
+        result = BridgeClient(auth_token=TOKEN).download(request)
+
+    assert (result.status, result.auth_state, result.error_code, result.message) == (
+        status,
+        auth_state,
+        code,
+        message,
+    )
+    assert result.file_path is None
+
+
 def _health(status="ready", **overrides) -> dict:
     ready = status == "ready"
     payload = {
@@ -560,3 +708,74 @@ def test_health_transport_error_is_unreachable():
     assert health.available is False
     assert health.status == "unreachable"
     assert health.error_code == "BRIDGE_UNREACHABLE"
+
+
+# The request boundary of bridge-server.ts (createBridgeRequestHandler), run
+# before classifyVersion: auth, route and method, media type, declared
+# Content-Length, bounded UTF-8 body read, JSON.parse and the plain-object
+# check. The client can only fail them by sending something malformed, so
+# these tests check the exact request httpx puts on the wire.
+BASE = "http://127.0.0.1:9870"
+
+
+def _server_accepts_media(headers: httpx.Headers) -> bool:
+    # validateMedia (bridge-server.ts:281-292).
+    if "content-encoding" in headers:
+        return False
+    raw = headers.get("content-type")
+    if raw is None:
+        return False
+    parts = [part.strip().lower() for part in raw.split(";")]
+    if parts[0] != "application/json" or len(parts) > 2:
+        return False
+    return len(parts) == 1 or parts[1] == "charset=utf-8"
+
+
+def test_download_request_passes_server_boundary(httpx_mock):
+    httpx_mock.add_response(method="POST", url=f"{BASE}/bridge/download", status_code=503, json={})
+    payload = _payload(doi="10.1000/caf\u00e9\n\U0001f600", allowed_domains=["Publisher.EXAMPLE"])
+
+    BridgeClient(base_url=BASE, auth_token=TOKEN).download(_request_from(payload))
+
+    [request] = httpx_mock.get_requests()
+    # isAuthorized (bridge-server.ts:274-279): the exact bearer header.
+    assert request.headers["authorization"] == f"Bearer {TOKEN}"
+    # classifyRoute (bridge-server.ts:264-271) and the method check.
+    assert (request.method, request.url.path) == ("POST", "/bridge/download")
+    assert _server_accepts_media(request.headers)
+    # Declared Content-Length (bridge-server.ts:154-160): digits, the body
+    # length, and within MAX_BODY_BYTES.
+    declared = request.headers["content-length"]
+    assert declared.isdigit() and int(declared) == len(request.content) <= 16384
+    # readBoundedBody decodes with fatal UTF-8; JSON.parse; isPlainObject.
+    body = json.loads(request.content.decode("utf-8", errors="strict"))
+    assert isinstance(body, dict)
+    assert body == {**payload, "allowed_domains": ["publisher.example"]}
+
+
+def test_health_request_passes_server_boundary(httpx_mock):
+    httpx_mock.add_response(method="GET", url=f"{BASE}/bridge/health/ready", status_code=503, json={})
+
+    BridgeClient(base_url=BASE, auth_token=TOKEN).health()
+
+    [request] = httpx_mock.get_requests()
+    assert request.headers["authorization"] == f"Bearer {TOKEN}"
+    assert (request.method, request.url.path) == ("GET", "/bridge/health/ready")
+    assert request.content == b""
+
+
+@pytest.mark.parametrize(
+    ("headers", "accepted"),
+    [
+        ({"content-type": "application/json; charset=utf-8"}, True),
+        ({"content-type": "application/json"}, True),
+        ({"content-type": "application/json; charset=latin-1"}, False),
+        ({"content-type": "text/plain"}, False),
+        ({"content-type": "application/json", "content-encoding": "gzip"}, False),
+        ({}, False),
+    ],
+)
+def test_server_media_check_mirror(headers, accepted):
+    # Keeps the validateMedia mirror above honest: UNSUPPORTED_MEDIA_TYPE
+    # (bridge-server.ts:152-153) for anything else.
+    assert _server_accepts_media(httpx.Headers(headers)) is accepted

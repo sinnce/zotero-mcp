@@ -4,6 +4,7 @@ import contextlib
 import errno
 import hashlib
 import hmac
+import ipaddress
 import os
 import re
 import stat
@@ -49,6 +50,9 @@ BRIDGE_AUTH_INVALID = "BRIDGE_AUTH_INVALID"
 # Client-side transport and contract failures of a configured bridge. None of
 # them is a bridge wire code, and none of them permits another channel.
 BRIDGE_UNREACHABLE = "BRIDGE_UNREACHABLE"
+# The configured bridge URL cannot address the bridge: not http(s), no or a
+# malformed host, a port outside 1..65535, userinfo, a query or a fragment.
+BRIDGE_URL_INVALID = "BRIDGE_URL_INVALID"
 BRIDGE_HEALTH_INVALID = "BRIDGE_HEALTH_INVALID"
 BRIDGE_RESPONSE_INVALID = "BRIDGE_RESPONSE_INVALID"
 _BRIDGE_TOKEN_ENV: Final[tuple[str, ...]] = ("ZOTERO_BRIDGE_TOKEN", "BRIDGE_AUTH_TOKEN", "BRIDGE_TOKEN")
@@ -182,7 +186,7 @@ def _candidate_host(url: str) -> str | None:
     # destination check then reports the host (DOMAIN_BLOCKED) or scheme
     # problem instead of an empty-allowlist schema error.
     parsed = bridge_policy.parse_url(url) if bridge_policy.is_printable_ascii(url) else None
-    if parsed is None or parsed.host_needs_idna or not parsed.host:
+    if parsed is None or not parsed.host:
         return None
     host = parsed.host.lower()
     return host if len(host) <= bridge_policy.MAX_DOMAIN_LENGTH else None
@@ -190,7 +194,7 @@ def _candidate_host(url: str) -> str | None:
 
 def _nested_host(url: str) -> str | None:
     parsed = bridge_policy.parse_url(url) if bridge_policy.is_printable_ascii(url) else None
-    if parsed is None or parsed.host_needs_idna or parsed.scheme not in _NESTED_SCHEMES or not parsed.host:
+    if parsed is None or parsed.scheme not in _NESTED_SCHEMES or not parsed.host:
         return None
     return _domain_or_none(parsed.host)
 
@@ -382,10 +386,38 @@ def _snapshot_name(file_path: str) -> str:
     return name if name not in ("", ".", "..") else "artifact"
 
 
+_BASE_URL_HOSTNAME = re.compile(r"[a-z0-9-]+(?:\.[a-z0-9-]+)*\.?")
+# Raised by httpx while building a request from a malformed URL; the base URL
+# check refuses these first, and this belt keeps any it misses terminal.
+_URL_ERRORS: Final[tuple[type[Exception], ...]] = (httpx.InvalidURL, httpx.UnsupportedProtocol, UnicodeError)
+
+
+def _is_valid_base_url(value: str) -> bool:
+    try:
+        url = httpx.URL(value)
+        raw_host = url.raw_host.decode("ascii")
+        url.host  # IDNA-decodes an xn-- label; httpx raises IDNAError at send time otherwise
+        port = url.port
+    except Exception:  # InvalidURL, IDNAError and any other parse failure
+        return False
+    if url.scheme not in ("http", "https") or url.userinfo or url.query or url.fragment:
+        return False
+    if port is not None and not 1 <= port <= 65535:
+        return False
+    if ":" in raw_host:  # httpx strips the brackets of an IPv6 literal
+        try:
+            ipaddress.IPv6Address(raw_host)
+        except ValueError:
+            return False
+        return True
+    return _BASE_URL_HOSTNAME.fullmatch(raw_host) is not None
+
+
 class BridgeClient:
     def __init__(self, base_url: str | None = None, auth_token: str | None = None):
         configured_url = base_url if base_url is not None else os.environ.get("BRIDGE_SERVER_URL", BRIDGE_SERVER_URL)
         self.base_url = configured_url.rstrip("/")
+        self._base_url_valid = _is_valid_base_url(self.base_url)
         # Presence, not validity: an empty or malformed token still means the
         # operator configured the bridge, so its auth failure is terminal.
         self.configured = (
@@ -424,6 +456,19 @@ class BridgeClient:
             auth_state="unchecked",
             error_code=BRIDGE_AUTH_INVALID,
             message="Bridge authentication is missing or malformed",
+        )
+
+    def _url_invalid_result(self) -> BridgeDownloadResult:
+        return BridgeDownloadResult(
+            status="failed",
+            auth_state="unchecked",
+            error_code=BRIDGE_URL_INVALID,
+            message="Bridge URL is malformed",
+        )
+
+    def _url_invalid_health(self) -> BridgeHealthResult:
+        return BridgeHealthResult(
+            False, self.base_url, "invalid_url", "Bridge URL is malformed.", error_code=BRIDGE_URL_INVALID
         )
 
     def _unreachable_result(self) -> BridgeDownloadResult:
@@ -567,6 +612,8 @@ class BridgeClient:
         headers = self._headers()
         if headers is None:
             return self._auth_unusable_result()
+        if not self._base_url_valid:
+            return self._url_invalid_result()
         # An explicit allowlist is authoritative and is checked whole: it is
         # never filtered or truncated into another list.
         allowed_domains: object
@@ -607,6 +654,8 @@ class BridgeClient:
                 headers=headers,
                 timeout=request.timeout_ms / 1000 + 5,
             )
+        except _URL_ERRORS:
+            return self._url_invalid_result()
         except httpx.TimeoutException:
             return self._timeout_result()
         except httpx.HTTPError:
@@ -631,8 +680,12 @@ class BridgeClient:
                 "Bridge authentication is missing or malformed.",
                 error_code=BRIDGE_AUTH_INVALID,
             )
+        if not self._base_url_valid:
+            return self._url_invalid_health()
         try:
             response = httpx.get(f"{self.base_url}/bridge/health/ready", headers=headers, timeout=2.0)
+        except _URL_ERRORS:
+            return self._url_invalid_health()
         except httpx.HTTPError as exc:
             return BridgeHealthResult(
                 False,

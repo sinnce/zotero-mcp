@@ -15,15 +15,12 @@ code the server would return without sending it:
 
 URLs are parsed with a WHATWG URL parser subset, because the server uses
 ``new URL()``; Python's ``urllib.parse`` disagrees with it on many inputs.
-The one deliberate divergence: a URL host (candidate or final URL) that
-needs IDNA processing (non-ASCII after percent-decoding, or any ``xn--``
-label) is refused with ``DOMAIN_BLOCKED`` instead of being run through
-UTS #46, which the standard library cannot reproduce exactly. The client is
-stricter there, never looser. Allowlist entries are not URL hosts and are
+A domain that is not ASCII after percent-decoding, or that has an ``xn--``
+label, goes through ``bridge_idna.to_ascii``, the client mirror of the
+UTS #46 ToASCII step Bun applies (ICU 75.1, Unicode 15.1), so an
+internationalized host is accepted, refused or rejected as unparsable
+exactly as on the server. Allowlist entries are not URL hosts and are
 matched exactly, ``xn--`` labels included.
-Inputs that UTS #46 certainly rejects (percent-decoded bytes that are not
-UTF-8, ``xn--`` labels that are not Punycode or decode to empty or all-ASCII
-text) fail URL parsing exactly as on the server.
 """
 
 from __future__ import annotations
@@ -33,6 +30,8 @@ import math
 import re
 from dataclasses import dataclass
 from typing import Final
+
+from . import bridge_idna
 
 BRIDGE_CONTRACT_VERSION: Final = "2.0.0"
 
@@ -61,6 +60,7 @@ MAX_DOI_CODE_POINTS: Final = 512
 MAX_URL_LENGTH: Final = 2048
 MAX_DOMAIN_LENGTH: Final = 253
 MAX_ALLOWED_DOMAINS: Final = 32
+MAX_BODY_BYTES: Final = 16_384
 MIN_TIMEOUT_MS: Final = 1000
 MAX_TIMEOUT_MS: Final = 300000
 
@@ -96,8 +96,6 @@ class WhatwgUrl:
     host: str | None
     port: int | None
     fragment: str | None
-    # The host needs UTS #46 processing that this parser does not reproduce.
-    host_needs_idna: bool = False
 
 
 def js_trim_differs(value: str) -> bool:
@@ -197,7 +195,7 @@ def _parse_authority(scheme: str, authority: str, remainder: str, *, special: bo
         raise _Failure
     if special and host_buffer == "":
         raise _Failure
-    host, needs_idna = _parse_host(host_buffer, opaque=not special) if host_buffer else ("", False)
+    host = _parse_host(host_buffer, opaque=not special) if host_buffer else ""
 
     port = None
     if port_buffer:
@@ -208,12 +206,11 @@ def _parse_authority(scheme: str, authority: str, remainder: str, *, special: bo
             raise _Failure
         if port == _SPECIAL_SCHEMES.get(scheme):
             port = None
-    return WhatwgUrl(scheme, username, password, host, port, _fragment(remainder), needs_idna)
+    return WhatwgUrl(scheme, username, password, host, port, _fragment(remainder))
 
 
 def _parse_file(rest: str) -> WhatwgUrl:
     host = None
-    needs_idna = False
     remainder = rest
     if rest[:1] in ("/", "\\") and rest[1:2] in ("/", "\\"):
         host_buffer, remainder = _split_authority(rest[2:], special=True)
@@ -223,53 +220,41 @@ def _parse_file(rest: str) -> WhatwgUrl:
         elif host_buffer == "":
             host = ""
         else:
-            host, needs_idna = _parse_host(host_buffer, opaque=False)
+            host = _parse_host(host_buffer, opaque=False)
             if host == "localhost":
                 host = ""
-    return WhatwgUrl("file", "", "", host, None, _fragment(remainder), needs_idna)
+    return WhatwgUrl("file", "", "", host, None, _fragment(remainder))
 
 
-def _parse_host(value: str, *, opaque: bool) -> tuple[str, bool]:
+def _parse_host(value: str, *, opaque: bool) -> str:
     if value.startswith("["):
         if not value.endswith("]"):
             raise _Failure
         _parse_ipv6(value[1:-1])
-        return value.lower(), False
+        return value.lower()
     if opaque:
         if any(char in _FORBIDDEN_HOST_CODE_POINTS for char in value):
             raise _Failure
-        return value, False
+        return value
     try:
         domain = _percent_decode(value).decode("utf-8")
     except UnicodeDecodeError:
         # Invalid UTF-8 decodes to U+FFFD, which UTS #46 disallows.
         raise _Failure from None
-    if not domain.isascii():
-        # UTS #46 ToASCII would run here; see the module docstring.
-        return domain, True
-    ascii_domain = domain.lower()
-    labels = ascii_domain.split(".")
-    if any(label.startswith("xn--") and not _is_decodable_punycode_label(label) for label in labels):
-        raise _Failure
+    # WebKit's domainToASCII: ICU runs only for a non-ASCII domain or one
+    # with a label starting "xn--" (any case); otherwise it lowercases.
+    if domain.isascii() and not any(label[:4].lower() == "xn--" for label in domain.split(".")):
+        ascii_domain = domain.lower()
+    else:
+        converted = bridge_idna.to_ascii(domain)
+        if converted is None:
+            raise _Failure
+        ascii_domain = converted
     if any(char in _FORBIDDEN_DOMAIN_CODE_POINTS for char in ascii_domain):
         raise _Failure
     if _ends_in_number(ascii_domain):
-        return _parse_ipv4(ascii_domain), False
-    return ascii_domain, any(label.startswith("xn--") for label in labels)
-
-
-def _is_decodable_punycode_label(label: str) -> bool:
-    """Return False when UTS #46 certainly rejects an ``xn--`` label.
-
-    UTS #46 records an error for a label that is not valid Punycode or that
-    decodes to an empty or all-ASCII string. A label that passes this check may
-    still fail UTS #46 validity rules; such hosts stay refused by the caller.
-    """
-    try:
-        decoded = label[4:].encode("ascii").decode("punycode")
-    except (UnicodeError, ValueError, IndexError, OverflowError):
-        return False
-    return decoded != "" and not decoded.isascii()
+        return _parse_ipv4(ascii_domain)
+    return ascii_domain
 
 
 def _percent_decode(value: str) -> bytes:
@@ -498,14 +483,14 @@ def is_json_int(value: object, minimum: int, maximum: int) -> bool:
     return minimum <= value <= maximum
 
 
-def _is_json_encodable(payload: dict) -> bool:
+def _encoded_size(payload: dict) -> int | None:
     # The same encoding httpx applies to json=; a payload it cannot encode
-    # can never reach the server.
+    # (None) can never reach the server.
     try:
-        json.dumps(payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
+        body = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
     except (TypeError, ValueError, UnicodeEncodeError):
-        return False
-    return True
+        return None
+    return len(body)
 
 
 def _matches_request_schema(payload: dict) -> bool:
@@ -551,7 +536,7 @@ def destination_error(doi: str, candidate_url: str, allowed_domains: list[str] |
     if parsed.username or parsed.password or parsed.fragment:
         return "INVALID_REQUEST"
     hostname = (parsed.host or "").lower()
-    if parsed.host_needs_idna or _is_node_ip(hostname) or not is_valid_domain(hostname):
+    if _is_node_ip(hostname) or not is_valid_domain(hostname):
         return "DOMAIN_BLOCKED"
     # normalizeAllowedDomains
     normalized: list[str] = []
@@ -574,8 +559,13 @@ def request_error(payload: dict) -> str | None:
     the session registry, DNS and readiness checks that follow stay on the
     server. A payload that cannot be JSON-encoded is ``INVALID_REQUEST``.
     """
-    if not _is_json_encodable(payload):
+    size = _encoded_size(payload)
+    if size is None:
         return "INVALID_REQUEST"
+    # The declared Content-Length check and bounded body read in
+    # bridge-server.ts run before JSON.parse and every payload check.
+    if size > MAX_BODY_BYTES:
+        return "REQUEST_TOO_LARGE"
     # classifyVersion in bridge-server.ts. The client always sends the key,
     # so the versionless-legacy branch cannot apply.
     version = payload.get("contract_version")
@@ -595,7 +585,7 @@ def is_valid_final_url(value: object) -> bool:
     if not re.fullmatch(r"[Hh][Tt][Tt][Pp][Ss]://[\x21-\x7e]+", value) or has_lone_percent(value):
         return False
     parsed = parse_url(value)
-    if parsed is None or parsed.host_needs_idna:
+    if parsed is None:
         return False
     hostname = parsed.host or ""
     if hostname.startswith("["):
@@ -612,4 +602,4 @@ def is_valid_final_url(value: object) -> bool:
 
 def final_url_hostname(value: str) -> str | None:
     parsed = parse_url(value)
-    return None if parsed is None or parsed.host_needs_idna else parsed.host
+    return None if parsed is None else parsed.host
