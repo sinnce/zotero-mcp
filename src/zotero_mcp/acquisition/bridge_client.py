@@ -42,6 +42,15 @@ ARTIFACT_SNAPSHOT_FAILED = "ARTIFACT_SNAPSHOT_FAILED"
 # Client-side rejection of a request that the 2.0.0 server schema would refuse.
 # It is emitted before any transport call and is not a bridge wire code.
 BRIDGE_REQUEST_INVALID = "BRIDGE_REQUEST_INVALID"
+# Client-side auth states, emitted before any transport call. The bridge is
+# BRIDGE_NOT_CONFIGURED when no token variable, BRIDGE_SERVER_URL or explicit
+# client argument names it, so acquisition may skip it for the independent
+# direct-download channel. A configured bridge whose token is missing or
+# malformed is BRIDGE_AUTH_INVALID, which is terminal and never a fallback.
+BRIDGE_NOT_CONFIGURED = "BRIDGE_NOT_CONFIGURED"
+BRIDGE_AUTH_INVALID = "BRIDGE_AUTH_INVALID"
+_BRIDGE_TOKEN_ENV: Final[tuple[str, ...]] = ("ZOTERO_BRIDGE_TOKEN", "BRIDGE_AUTH_TOKEN", "BRIDGE_TOKEN")
+_MAX_PORT = 65535
 # open(2) errors that mean the staged path is not a regular file: a symlink
 # swapped in after lstat (O_NOFOLLOW) or a socket/device node.
 _NOT_REGULAR_OPEN_ERRNOS: Final[frozenset[int]] = frozenset({errno.ELOOP, errno.ENXIO})
@@ -243,6 +252,21 @@ def _is_uuid(value: object) -> bool:
     return True
 
 
+def _has_valid_port(parsed) -> bool:
+    # WHATWG new URL(), the server's parser, accepts an empty port or ASCII
+    # digits (leading zeros allowed) up to 65535 and rejects anything else.
+    # Reading .port also raises for these on Python >= 3.12; the explicit
+    # digit check keeps older int() parsing ("+80", "8_0", " 80") out.
+    _, has_port, port = parsed.netloc.rpartition("@")[2].partition(":")
+    if has_port and port and not (port.isascii() and port.isdigit() and int(port) <= _MAX_PORT):
+        return False
+    try:
+        parsed.port
+    except ValueError:
+        return False
+    return True
+
+
 def _is_valid_final_url(value: object, allowed_domains: list[str]) -> bool:
     if (
         not isinstance(value, str)
@@ -257,6 +281,8 @@ def _is_valid_final_url(value: object, allowed_domains: list[str]) -> bool:
         return False
     host = _normalize_domain(parsed.hostname or "")
     if not host or parsed.scheme.lower() != "https" or parsed.username or parsed.password or parsed.fragment:
+        return False
+    if not _has_valid_port(parsed):
         return False
     return host in allowed_domains or any(host.endswith(f".{domain}") for domain in allowed_domains)
 
@@ -280,6 +306,7 @@ def _is_valid_candidate_url(value: object) -> bool:
         and not parsed.username
         and not parsed.password
         and not parsed.fragment
+        and _has_valid_port(parsed)
     )
 
 
@@ -495,6 +522,14 @@ class BridgeClient:
     def __init__(self, base_url: str | None = None, auth_token: str | None = None):
         configured_url = base_url if base_url is not None else os.environ.get("BRIDGE_SERVER_URL", BRIDGE_SERVER_URL)
         self.base_url = configured_url.rstrip("/")
+        # Presence, not validity: an empty or malformed token still means the
+        # operator configured the bridge, so its auth failure is terminal.
+        self.configured = (
+            base_url is not None
+            or auth_token is not None
+            or "BRIDGE_SERVER_URL" in os.environ
+            or any(name in os.environ for name in _BRIDGE_TOKEN_ENV)
+        )
         self._auth_token = (
             auth_token
             if auth_token is not None
@@ -511,6 +546,21 @@ class BridgeClient:
             "Accept": "application/json",
             "Content-Type": "application/json; charset=utf-8",
         }
+
+    def _auth_unusable_result(self) -> BridgeDownloadResult:
+        if not self.configured:
+            return BridgeDownloadResult(
+                status="failed",
+                auth_state="unchecked",
+                error_code=BRIDGE_NOT_CONFIGURED,
+                message="Bridge is not configured",
+            )
+        return BridgeDownloadResult(
+            status="failed",
+            auth_state="unchecked",
+            error_code=BRIDGE_AUTH_INVALID,
+            message="Bridge authentication is missing or malformed",
+        )
 
     def _unavailable_result(self, message: str = "Bridge is unavailable") -> BridgeDownloadResult:
         return BridgeDownloadResult(
@@ -639,7 +689,7 @@ class BridgeClient:
     def download(self, request: BridgeDownloadRequest) -> BridgeDownloadResult:
         headers = self._headers()
         if headers is None:
-            return self._unavailable_result()
+            return self._auth_unusable_result()
         if not _is_valid_request_fields(request):
             return self._invalid_request_result()
         if not _is_valid_candidate_url(request.candidate_url):
@@ -700,7 +750,21 @@ class BridgeClient:
     def health(self) -> BridgeHealthResult:
         headers = self._headers()
         if headers is None:
-            return BridgeHealthResult(False, self.base_url, "unavailable", "Bridge authentication is not configured.")
+            if not self.configured:
+                return BridgeHealthResult(
+                    False,
+                    self.base_url,
+                    "not_configured",
+                    "Bridge is not configured.",
+                    error_code=BRIDGE_NOT_CONFIGURED,
+                )
+            return BridgeHealthResult(
+                False,
+                self.base_url,
+                "unauthorized",
+                "Bridge authentication is missing or malformed.",
+                error_code=BRIDGE_AUTH_INVALID,
+            )
         try:
             response = httpx.get(f"{self.base_url}/bridge/health/ready", headers=headers, timeout=2.0)
         except httpx.HTTPError as exc:

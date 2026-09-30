@@ -13,6 +13,7 @@ from zotero_mcp._app import mcp
 from zotero_mcp.acquisition.async_bridge_client import AsyncBridgeClient as BridgeClient
 from zotero_mcp.acquisition.bridge_client import (
     ARTIFACT_SNAPSHOT_FAILED,
+    BRIDGE_AUTH_INVALID,
     BRIDGE_REQUEST_INVALID,
     BridgeDownloadRequest,
     snapshot_bridge_artifact,
@@ -27,16 +28,18 @@ from zotero_mcp.tools._helpers import _get_write_client
 logger = logging.getLogger(__name__)
 
 _EXPLICIT_PAYWALL_CODES = {"AUTH_REQUIRED", "HTML_LANDING", "ACCESS_DENIED", "DOMAIN_BLOCKED"}
-# UNAUTHORIZED means the bridge rejected our bearer token; no other route or
-# retry can succeed with it. BRIDGE_REQUEST_INVALID is a client-side rejection
-# of caller input that the bridge contract would refuse.
+# UNAUTHORIZED means the bridge rejected our bearer token and
+# BRIDGE_AUTH_INVALID means a configured bridge has no usable token; no other
+# route, retry or channel may stand in for either. BRIDGE_REQUEST_INVALID is a
+# client-side rejection of caller input that the bridge contract would refuse.
+_BRIDGE_AUTH_FAILURE_CODES = {"UNAUTHORIZED", BRIDGE_AUTH_INVALID}
 _TERMINAL_BRIDGE_CODES = {
     "AUTH_REQUIRED",
     "DOMAIN_BLOCKED",
     "CAPTCHA",
     "CANCELLED",
-    "UNAUTHORIZED",
     BRIDGE_REQUEST_INVALID,
+    *_BRIDGE_AUTH_FAILURE_CODES,
 }
 
 
@@ -125,11 +128,17 @@ def _bridge_artifact_failure(error_code: str) -> dict:
     }
 
 
-def _bridge_unauthorized_failure() -> dict:
+_BRIDGE_AUTH_FAILURE_MESSAGES = {
+    "UNAUTHORIZED": "Bridge rejected the configured authentication",
+    BRIDGE_AUTH_INVALID: "Bridge is configured but its authentication is missing or malformed",
+}
+
+
+def _bridge_auth_failure(error_code: str) -> dict:
     return {
         "status": "failed",
-        "error_code": "UNAUTHORIZED",
-        "message": "[UNAUTHORIZED] Bridge rejected the configured authentication",
+        "error_code": error_code,
+        "message": f"[{error_code}] {_BRIDGE_AUTH_FAILURE_MESSAGES[error_code]}",
     }
 
 
@@ -137,39 +146,32 @@ async def _complete_bridge_download(
     ctx, resolution, identifier: str, result, session_name: str, access_source: str, message: str, auto_ingest: bool
 ) -> dict:
     # Fail closed before reporting or ingesting a bridge artifact whose staged
-    # bytes do not match the bridge-declared sha256 and size_bytes.
-    if not auto_ingest:
-        # The caller gets a verified copy it owns, not the bridge-owned staged
-        # path, which the bridge may replace or expire after verification.
-        artifact_dir = tempfile.mkdtemp(prefix="zotero-mcp-bridge-artifact-")
+    # bytes do not match the bridge-declared sha256 and size_bytes. The staged
+    # path stays owned by the bridge, which may replace or expire it after
+    # verification, so both ingest and the caller use one private verified
+    # copy that the caller owns and that outlives this call.
+    artifact_dir = tempfile.mkdtemp(prefix="zotero-mcp-bridge-artifact-")
+    try:
         error_code, snapshot_path = await asyncio.to_thread(snapshot_bridge_artifact, result, artifact_dir)
         if error_code is not None or snapshot_path is None:
             shutil.rmtree(artifact_dir, ignore_errors=True)
             return _bridge_artifact_failure(error_code or ARTIFACT_SNAPSHOT_FAILED)
-        return _build_bridge_output(result, session_name, access_source, message, file_path=str(snapshot_path))
-
-    # The staged path stays writable by the bridge, so ingest reads a private
-    # snapshot whose bytes are exactly the ones that were hashed.
-    snapshot_dir = tempfile.mkdtemp(prefix="zotero-mcp-bridge-verified-")
-    try:
-        error_code, snapshot_path = await asyncio.to_thread(snapshot_bridge_artifact, result, snapshot_dir)
-        if error_code is not None:
-            return _bridge_artifact_failure(error_code)
-        out = _build_bridge_output(result, session_name, access_source, message)
-        item_key = _run_auto_ingest(ctx, resolution, snapshot_path, identifier)
-        if item_key:
-            out["zotero_item_key"] = item_key
+        out = _build_bridge_output(session_name, access_source, message, file_path=str(snapshot_path))
+        if auto_ingest:
+            item_key = _run_auto_ingest(ctx, resolution, snapshot_path, identifier)
+            if item_key:
+                out["zotero_item_key"] = item_key
         return out
-    finally:
-        shutil.rmtree(snapshot_dir, ignore_errors=True)
+    except BaseException:
+        # No result reaches the caller, so nobody else owns the copy.
+        shutil.rmtree(artifact_dir, ignore_errors=True)
+        raise
 
 
-def _build_bridge_output(
-    result, session_name: str, access_source: str, message: str, file_path: str | None = None
-) -> dict:
+def _build_bridge_output(session_name: str, access_source: str, message: str, file_path: str) -> dict:
     return {
         "status": "complete",
-        "file_path": file_path if file_path is not None else result.file_path,
+        "file_path": file_path,
         "provenance": {
             "bridge_session": session_name,
             "access_source": access_source,
@@ -197,8 +199,11 @@ async def acquire_paper(
     if session_name and (location.requires_session or _is_explicit_libproxy_url(config, location)):
         bridge = BridgeClient()
         health = await bridge.health()
-        if health.error_code == "UNAUTHORIZED":
-            return _bridge_unauthorized_failure()
+        # An auth failure on a configured bridge is terminal. Only a bridge
+        # that is not configured at all, or one with usable auth that is not
+        # reachable or not ready, falls through to the direct HTTP channel.
+        if health.error_code in _BRIDGE_AUTH_FAILURE_CODES:
+            return _bridge_auth_failure(health.error_code)
         if health.available:
             bridge_identifier = _bridge_doi(identifier, resolution)
             result = None
@@ -253,6 +258,8 @@ async def acquire_paper(
                     message=f"Downloaded via bridge session '{session_name}'",
                     auto_ingest=effective_auto_ingest,
                 )
+            if result and result.error_code in _BRIDGE_AUTH_FAILURE_CODES:
+                return _bridge_auth_failure(result.error_code)
             if result and _is_terminal_bridge_result(result):
                 return {
                     "status": "failed",

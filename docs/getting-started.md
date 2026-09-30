@@ -208,7 +208,8 @@ What to keep in mind:
 
 - `BRIDGE_AUTH_TOKEN` must be the same on both sides and should be at least 32 characters long.
 - Store it in a private env file, secret manager, or service definition, not in committed config or shared screenshots.
-- Missing caller `BRIDGE_AUTH_TOKEN` disables bridge calls. `acquire_paper` then stays on the normal direct-download path.
+- With no caller bridge configuration at all (none of `ZOTERO_BRIDGE_TOKEN`, `BRIDGE_AUTH_TOKEN`, `BRIDGE_TOKEN` or `BRIDGE_SERVER_URL` set), bridge calls are skipped and `acquire_paper` stays on the normal direct-download path.
+- Once any of those is set, an empty, missing or malformed token fails with `BRIDGE_AUTH_INVALID` before any bridge request, and acquisition stops instead of switching to direct download.
 - `BRIDGE_ALLOWED_DOMAINS` is optional and should contain only operator-approved extra hostnames that are not already derived from the candidate URL or nested redirect targets.
 
 #### Caller-first rollout
@@ -237,7 +238,7 @@ The source-level flow is:
 2. Institutional LibProxy locations are marked with `requires_session=true` and `session_kind="libproxy"`.
 3. `acquire_paper(identifier, session_name="libproxy-snu")` checks `http://127.0.0.1:9870/bridge/health` and sends bearer auth on that request when `BRIDGE_AUTH_TOKEN` is configured.
 4. If the bridge is available and the caller has a token, it sends `POST /bridge/download` with `doi`, `candidate_url`, `session_name`, and the required allowed-domain list.
-5. If the bridge succeeds, the returned provenance includes `bridge_session`; otherwise `acquire_paper` falls back to the standard HTTP download path.
+5. If the bridge succeeds, the returned provenance includes `bridge_session` and `file_path` is a caller-owned verified copy (also the file ingested with `auto_ingest=true`). Auth failures (`UNAUTHORIZED`, `BRIDGE_AUTH_INVALID`) and other terminal bridge errors stop acquisition; an unreachable or not-ready bridge falls back to the standard HTTP download path.
 
 The bridge does not automate campus login. Start and authenticate the named Pinchtab browser session before calling `acquire_paper` with `session_name`.
 

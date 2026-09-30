@@ -5,6 +5,7 @@ import pytest
 
 from zotero_mcp.acquisition.bridge_client import (
     BRIDGE_CONTRACT_VERSION,
+    BRIDGE_NOT_CONFIGURED,
     BRIDGE_SERVICE,
     BridgeClient,
     BridgeDownloadRequest,
@@ -99,12 +100,14 @@ def test_missing_token_fails_closed_without_http_request(monkeypatch):
     monkeypatch.delenv("ZOTERO_BRIDGE_TOKEN", raising=False)
     monkeypatch.delenv("BRIDGE_AUTH_TOKEN", raising=False)
     monkeypatch.delenv("BRIDGE_TOKEN", raising=False)
+    monkeypatch.delenv("BRIDGE_SERVER_URL", raising=False)
     client = BridgeClient()
-    with patch("zotero_mcp.acquisition.bridge_client.httpx.get") as get, patch(
-        "zotero_mcp.acquisition.bridge_client.httpx.post"
-    ) as post:
+    with (
+        patch("zotero_mcp.acquisition.bridge_client.httpx.get") as get,
+        patch("zotero_mcp.acquisition.bridge_client.httpx.post") as post,
+    ):
         assert client.is_available() is False
-        assert client.download(_request()).error_code == "BRIDGE_UNAVAILABLE"
+        assert client.download(_request()).error_code == BRIDGE_NOT_CONFIGURED
     get.assert_not_called()
     post.assert_not_called()
 
@@ -284,7 +287,9 @@ def test_not_ready_health_is_not_available_even_with_valid_json():
         _response(200, _health("ready"), content_type="text/plain"),
         _response(200, {**_health("ready"), "service": "other"}),
         _response(200, {**_health("ready"), "sessions": {"configured": 1, "ready": 2}}),
-        _response(503, {**_health("not_ready"), "capabilities": {"browser_get_version": True, "fetch_interception": False}}),
+        _response(
+            503, {**_health("not_ready"), "capabilities": {"browser_get_version": True, "fetch_interception": False}}
+        ),
     ],
 )
 def test_health_fails_closed_for_invalid_readiness(response):

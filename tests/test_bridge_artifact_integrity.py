@@ -380,15 +380,16 @@ async def test_acquire_ingests_verified_bridge_artifact(bridge_artifact, make_re
     )
 
     assert result["status"] == "complete"
-    assert result["file_path"] == bridge_result.file_path
     assert result["zotero_item_key"] == "INGESTED"
     ingest.assert_called_once()
     assert ingested["bytes"] == CONTENT
-    # Ingest reads a private verified snapshot that keeps the staged basename
-    # and is removed once ingest returns.
+    # Ingest reads a private verified copy that keeps the staged basename; the
+    # caller gets that same copy, never the bridge-owned staged path, and it
+    # stays valid after the call returns.
     assert ingested["path"].name == "paper.pdf"
     assert str(ingested["path"]) != bridge_result.file_path
-    assert not ingested["path"].exists()
+    assert result["file_path"] == str(ingested["path"])
+    assert ingested["path"].read_bytes() == CONTENT
     downloader_class.assert_not_called()
 
 
