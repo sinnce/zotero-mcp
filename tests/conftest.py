@@ -1,6 +1,7 @@
 """Shared test fixtures for Zotero MCP tests."""
 
 import hashlib
+import tempfile
 
 import pytest
 
@@ -154,8 +155,15 @@ def fake_zot():
 
 
 @pytest.fixture
-def bridge_artifact(tmp_path):
-    """Stage a real file and return a complete bridge result that declares it."""
+def bridge_artifact(tmp_path, monkeypatch):
+    """Stage a real file and return a complete bridge result that declares it.
+
+    Verified copies handed to the caller land in a per-test temp root rather
+    than the system temp directory.
+    """
+    caller_tmp = tmp_path / "caller-tmp"
+    caller_tmp.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(caller_tmp))
 
     def _make(name="paper.pdf", content=b"%PDF-1.7 staged bridge artifact\n"):
         path = tmp_path / name

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 
-from .bridge_client import BridgeClient, BridgeDownloadRequest, BridgeDownloadResult
+from .bridge_client import BridgeClient, BridgeDownloadRequest, BridgeDownloadResult, BridgeHealthResult
 
 
 class AsyncBridgeClient:
@@ -18,6 +18,9 @@ class AsyncBridgeClient:
 
     async def download(self, request: BridgeDownloadRequest) -> BridgeDownloadResult:
         return await asyncio.to_thread(self._sync_client.download, request)
+
+    async def health(self) -> BridgeHealthResult:
+        return await asyncio.to_thread(self._sync_client.health)
 
     async def is_available(self) -> bool:
         return await asyncio.to_thread(self._sync_client.is_available)

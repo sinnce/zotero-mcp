@@ -2,8 +2,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from zotero_mcp.acquisition.bridge_client import BridgeHealthResult
 from zotero_mcp.acquisition.types import AccessLocation, AccessResolution, ArtifactDownload, PipelineError
 from zotero_mcp.tools.download_paper_artifact import download_paper_artifact
+
+READY_HEALTH = BridgeHealthResult(True, "http://127.0.0.1:9870", "ready", "Bridge is ready.")
+UNAVAILABLE_HEALTH = BridgeHealthResult(False, "http://127.0.0.1:9870", "unavailable", "Bridge is unavailable.")
 
 
 @pytest.fixture
@@ -96,7 +100,7 @@ class TestBridgeFallback:
             patch("zotero_mcp.tools.acquire_paper.BridgeClient") as MockBridge,
         ):
             mock_instance = MagicMock()
-            mock_instance.is_available = AsyncMock(return_value=True)
+            mock_instance.health = AsyncMock(return_value=READY_HEALTH)
             mock_instance.download = AsyncMock(return_value=bridge_result)
             MockBridge.return_value = mock_instance
 
@@ -126,7 +130,7 @@ class TestBridgeFallback:
             patch("zotero_mcp.tools.acquire_paper.ArtifactDownloader") as MockDownloader,
         ):
             mock_bridge = MagicMock()
-            mock_bridge.is_available = AsyncMock(return_value=False)
+            mock_bridge.health = AsyncMock(return_value=UNAVAILABLE_HEALTH)
             MockBridge.return_value = mock_bridge
 
             mock_dl = MagicMock()
@@ -167,5 +171,5 @@ class TestBridgeFallback:
 
         assert result["status"] == "complete"
         assert result["message"] == "Downloaded via HTTP"
-        mock_bridge.is_available.assert_not_called()
+        mock_bridge.health.assert_not_called()
         mock_dl.download.assert_called_once()

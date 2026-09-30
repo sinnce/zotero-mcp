@@ -12,9 +12,10 @@ from fastmcp import Context
 from zotero_mcp._app import mcp
 from zotero_mcp.acquisition.async_bridge_client import AsyncBridgeClient as BridgeClient
 from zotero_mcp.acquisition.bridge_client import (
+    ARTIFACT_SNAPSHOT_FAILED,
+    BRIDGE_REQUEST_INVALID,
     BridgeDownloadRequest,
     snapshot_bridge_artifact,
-    verify_bridge_artifact,
 )
 from zotero_mcp.acquisition.config import load_acquisition_config
 from zotero_mcp.acquisition.download import ArtifactDownloader
@@ -26,7 +27,17 @@ from zotero_mcp.tools._helpers import _get_write_client
 logger = logging.getLogger(__name__)
 
 _EXPLICIT_PAYWALL_CODES = {"AUTH_REQUIRED", "HTML_LANDING", "ACCESS_DENIED", "DOMAIN_BLOCKED"}
-_TERMINAL_BRIDGE_CODES = {"AUTH_REQUIRED", "DOMAIN_BLOCKED", "CAPTCHA", "CANCELLED"}
+# UNAUTHORIZED means the bridge rejected our bearer token; no other route or
+# retry can succeed with it. BRIDGE_REQUEST_INVALID is a client-side rejection
+# of caller input that the bridge contract would refuse.
+_TERMINAL_BRIDGE_CODES = {
+    "AUTH_REQUIRED",
+    "DOMAIN_BLOCKED",
+    "CAPTCHA",
+    "CANCELLED",
+    "UNAUTHORIZED",
+    BRIDGE_REQUEST_INVALID,
+}
 
 
 def _run_auto_ingest(ctx, resolution, file_path, identifier):
@@ -114,16 +125,28 @@ def _bridge_artifact_failure(error_code: str) -> dict:
     }
 
 
+def _bridge_unauthorized_failure() -> dict:
+    return {
+        "status": "failed",
+        "error_code": "UNAUTHORIZED",
+        "message": "[UNAUTHORIZED] Bridge rejected the configured authentication",
+    }
+
+
 async def _complete_bridge_download(
     ctx, resolution, identifier: str, result, session_name: str, access_source: str, message: str, auto_ingest: bool
 ) -> dict:
     # Fail closed before reporting or ingesting a bridge artifact whose staged
     # bytes do not match the bridge-declared sha256 and size_bytes.
     if not auto_ingest:
-        error_code = await asyncio.to_thread(verify_bridge_artifact, result)
-        if error_code is not None:
-            return _bridge_artifact_failure(error_code)
-        return _build_bridge_output(result, session_name, access_source, message)
+        # The caller gets a verified copy it owns, not the bridge-owned staged
+        # path, which the bridge may replace or expire after verification.
+        artifact_dir = tempfile.mkdtemp(prefix="zotero-mcp-bridge-artifact-")
+        error_code, snapshot_path = await asyncio.to_thread(snapshot_bridge_artifact, result, artifact_dir)
+        if error_code is not None or snapshot_path is None:
+            shutil.rmtree(artifact_dir, ignore_errors=True)
+            return _bridge_artifact_failure(error_code or ARTIFACT_SNAPSHOT_FAILED)
+        return _build_bridge_output(result, session_name, access_source, message, file_path=str(snapshot_path))
 
     # The staged path stays writable by the bridge, so ingest reads a private
     # snapshot whose bytes are exactly the ones that were hashed.
@@ -141,10 +164,12 @@ async def _complete_bridge_download(
         shutil.rmtree(snapshot_dir, ignore_errors=True)
 
 
-def _build_bridge_output(result, session_name: str, access_source: str, message: str) -> dict:
+def _build_bridge_output(
+    result, session_name: str, access_source: str, message: str, file_path: str | None = None
+) -> dict:
     return {
         "status": "complete",
-        "file_path": result.file_path,
+        "file_path": file_path if file_path is not None else result.file_path,
         "provenance": {
             "bridge_session": session_name,
             "access_source": access_source,
@@ -171,7 +196,10 @@ async def acquire_paper(
 
     if session_name and (location.requires_session or _is_explicit_libproxy_url(config, location)):
         bridge = BridgeClient()
-        if await bridge.is_available():
+        health = await bridge.health()
+        if health.error_code == "UNAUTHORIZED":
+            return _bridge_unauthorized_failure()
+        if health.available:
             bridge_identifier = _bridge_doi(identifier, resolution)
             result = None
 

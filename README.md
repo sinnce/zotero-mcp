@@ -542,6 +542,8 @@ The caller sends an explicit allowed-domain set on `POST /bridge/download`. `GET
 2. If the resolved location requires a session and you pass `session_name`, it checks whether the bridge server is running at `http://127.0.0.1:9870` and sends bearer auth on that health check when `BRIDGE_AUTH_TOKEN` is configured.
 3. If the bridge is available and the caller has a token, it sends a `POST /bridge/download` request with the DOI, candidate URL, session name, and required allowed-domain set. The bridge server handles navigation and PDF download inside the named browser session.
 4. If the bridge is unavailable or `session_name` is omitted, acquisition falls back to the standard HTTP download path. Nothing breaks; you just won't get paywalled PDFs.
+5. If the bridge rejects the caller token (`UNAUTHORIZED`, on health or download), acquisition stops with that error and does not retry or fall back. A request that the 2.0.0 contract would refuse (for example a `session_name` outside `[a-z0-9][a-z0-9._-]{0,127}`) is rejected before it is sent with `BRIDGE_REQUEST_INVALID`, also without fallback.
+6. With `auto_ingest=false`, the returned `file_path` is not the bridge's staged file but a private copy (mode `0600` in a new temp directory) whose bytes matched the bridge-declared SHA-256 and size; the caller owns and deletes it. A staged artifact that fails verification returns an `ARTIFACT_*` error code instead.
 
 For LibProxy, `acquire_paper` has one extra source-backed behavior: if the DOI resolved to a LibProxy URL and you provided `session_name`, it first tries direct browser navigation to `https://doi.org/{doi}` through the browser session. If that still lands on an explicit paywall, it retries through the proxied institutional URL.
 

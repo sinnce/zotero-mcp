@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import errno
 import hashlib
 import hmac
 import ipaddress
@@ -34,6 +35,13 @@ ARTIFACT_NOT_REGULAR = "ARTIFACT_NOT_REGULAR"
 ARTIFACT_UNREADABLE = "ARTIFACT_UNREADABLE"
 ARTIFACT_SIZE_MISMATCH = "ARTIFACT_SIZE_MISMATCH"
 ARTIFACT_HASH_MISMATCH = "ARTIFACT_HASH_MISMATCH"
+ARTIFACT_SNAPSHOT_FAILED = "ARTIFACT_SNAPSHOT_FAILED"
+# Client-side rejection of a request that the 2.0.0 server schema would refuse.
+# It is emitted before any transport call and is not a bridge wire code.
+BRIDGE_REQUEST_INVALID = "BRIDGE_REQUEST_INVALID"
+# open(2) errors that mean the staged path is not a regular file: a symlink
+# swapped in after lstat (O_NOFOLLOW) or a socket/device node.
+_NOT_REGULAR_OPEN_ERRNOS: Final[frozenset[int]] = frozenset({errno.ELOOP, errno.ENXIO})
 
 BridgeStatus = Literal["complete", "failed", "auth_required"]
 BridgeAuthState = Literal[
@@ -98,6 +106,13 @@ _ERROR_STATUS: Final[dict[str, tuple[str, str]]] = {
     "SESSION_BUSY": ("failed", "busy"),
     "AUTH_AMBIGUOUS": ("failed", "ambiguous"),
 }
+# Request field bounds mirror bridgeDownloadRequestSchema in the server's
+# bridge-v2-contract.ts (contract 2.0.0).
+_MAX_DOI_CODE_POINTS = 512
+_SESSION_NAME_PATTERN = re.compile(r"[a-z0-9][a-z0-9._-]{0,127}")
+_EXPECTED_ARTIFACTS: Final[frozenset[str]] = frozenset({"pdf"})
+_MIN_TIMEOUT_MS = 1000
+_MAX_TIMEOUT_MS = 300000
 _DOMAIN_PATTERN = re.compile(
     r"(?=.{1,253}\Z)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+"
     r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\Z"
@@ -261,6 +276,60 @@ def _is_valid_candidate_url(value: object) -> bool:
     )
 
 
+def _is_valid_doi(value: object) -> bool:
+    # Python str length counts code points, matching the server's
+    # Array.from(value).length. Lone surrogates cannot be sent as UTF-8.
+    return (
+        isinstance(value, str)
+        and 1 <= len(value) <= _MAX_DOI_CODE_POINTS
+        and not any(0xD800 <= ord(char) <= 0xDFFF for char in value)
+    )
+
+
+def _is_valid_timeout_ms(value: object) -> bool:
+    return not isinstance(value, bool) and isinstance(value, int) and _MIN_TIMEOUT_MS <= value <= _MAX_TIMEOUT_MS
+
+
+def _is_valid_requested_domains(value: object) -> bool:
+    return value is None or (isinstance(value, (list, tuple)) and all(isinstance(domain, str) for domain in value))
+
+
+def _is_valid_request_fields(request: BridgeDownloadRequest) -> bool:
+    return (
+        request.contract_version == BRIDGE_CONTRACT_VERSION
+        and _is_uuid(request.request_id)
+        and _is_valid_doi(request.doi)
+        and isinstance(request.session_name, str)
+        and _SESSION_NAME_PATTERN.fullmatch(request.session_name) is not None
+        and isinstance(request.expected_artifact, str)
+        and request.expected_artifact in _EXPECTED_ARTIFACTS
+        and _is_valid_timeout_ms(request.timeout_ms)
+        and _is_valid_requested_domains(request.allowed_domains)
+    )
+
+
+def _is_valid_serialized_domains(domains: list[str]) -> bool:
+    return 1 <= len(domains) <= _MAX_ALLOWED_DOMAINS and all(
+        1 <= len(domain) <= _MAX_DOMAIN_LENGTH and re.fullmatch(r"[\x21-\x7e]+", domain) for domain in domains
+    )
+
+
+def _is_unauthorized_envelope(response: httpx.Response, payload: dict) -> bool:
+    # The server rejects a bad bearer token on every route, health included,
+    # with this exact 2.0.0 error envelope.
+    http_status, message = _ERROR_DETAILS["UNAUTHORIZED"]
+    return (
+        response.status_code == http_status
+        and set(payload) == {"contract_version", "request_id", "status", "auth_state", "error_code", "message"}
+        and payload.get("contract_version") == BRIDGE_CONTRACT_VERSION
+        and payload.get("request_id") is None
+        and payload.get("status") == "failed"
+        and payload.get("auth_state") == "unchecked"
+        and payload.get("error_code") == "UNAUTHORIZED"
+        and payload.get("message") == message
+    )
+
+
 def _is_datetime(value: object) -> bool:
     if not isinstance(value, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z", value):
         return False
@@ -327,8 +396,10 @@ def _check_bridge_artifact(result: BridgeDownloadResult, dest_dir: Path | None) 
         fd = os.open(file_path, flags)
     except FileNotFoundError:
         return ARTIFACT_MISSING, None
-    except OSError:
-        return ARTIFACT_NOT_REGULAR, None
+    except OSError as exc:
+        if exc.errno in _NOT_REGULAR_OPEN_ERRNOS:
+            return ARTIFACT_NOT_REGULAR, None
+        return ARTIFACT_UNREADABLE, None
     snapshot_path: Path | None = None
     error_code: str | None = None
     digest = hashlib.sha256()
@@ -347,10 +418,23 @@ def _check_bridge_artifact(result: BridgeDownloadResult, dest_dir: Path | None) 
             if dest_dir is not None:
                 target = dest_dir / _snapshot_name(file_path)
                 sink_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
-                sink = os.fdopen(os.open(target, sink_flags | getattr(os, "O_CLOEXEC", 0), 0o600), "wb")
+                try:
+                    sink_fd = os.open(target, sink_flags | getattr(os, "O_CLOEXEC", 0), 0o600)
+                except OSError:
+                    # The destination entry is not ours (it may already exist
+                    # as a link), so it must not be unlinked below.
+                    return ARTIFACT_SNAPSHOT_FAILED, None
                 snapshot_path = target
+                sink = os.fdopen(sink_fd, "wb")
             try:
-                while chunk := handle.read(_ARTIFACT_READ_CHUNK):
+                while True:
+                    try:
+                        chunk = handle.read(_ARTIFACT_READ_CHUNK)
+                    except OSError:
+                        error_code = ARTIFACT_UNREADABLE
+                        break
+                    if not chunk:
+                        break
                     total += len(chunk)
                     if total > declared_size:
                         error_code = ARTIFACT_SIZE_MISMATCH
@@ -362,7 +446,9 @@ def _check_bridge_artifact(result: BridgeDownloadResult, dest_dir: Path | None) 
                 if sink is not None:
                     sink.close()
     except OSError:
-        error_code = ARTIFACT_UNREADABLE
+        # Reads are handled above; what remains are fstat or snapshot
+        # write/close failures.
+        error_code = ARTIFACT_SNAPSHOT_FAILED if snapshot_path is not None else ARTIFACT_UNREADABLE
     if error_code is None and total != declared_size:
         error_code = ARTIFACT_SIZE_MISMATCH
     if error_code is None and not hmac.compare_digest(digest.hexdigest(), declared_sha256):
@@ -405,6 +491,14 @@ class BridgeClient:
     def _unavailable_result(self, message: str = "Bridge is unavailable") -> BridgeDownloadResult:
         return BridgeDownloadResult(
             status="failed", auth_state="missing", error_code="BRIDGE_UNAVAILABLE", message=message
+        )
+
+    def _invalid_request_result(self) -> BridgeDownloadResult:
+        return BridgeDownloadResult(
+            status="failed",
+            auth_state="unchecked",
+            error_code=BRIDGE_REQUEST_INVALID,
+            message="Bridge request is invalid",
         )
 
     def _timeout_result(self) -> BridgeDownloadResult:
@@ -522,8 +616,8 @@ class BridgeClient:
         headers = self._headers()
         if headers is None:
             return self._unavailable_result()
-        if request.contract_version != BRIDGE_CONTRACT_VERSION:
-            return self._unavailable_result("Unsupported bridge contract version")
+        if not _is_valid_request_fields(request):
+            return self._invalid_request_result()
         if not _is_valid_candidate_url(request.candidate_url):
             return BridgeDownloadResult(
                 status="failed",
@@ -554,8 +648,8 @@ class BridgeClient:
                 message="Candidate URL has no allowed domain",
             )
         request_id = request.request_id
-        if not isinstance(request_id, str) or not _is_uuid(request_id):
-            return self._unavailable_result("Invalid bridge request id")
+        if not isinstance(request_id, str) or not _is_valid_serialized_domains(allowed_domains):
+            return self._invalid_request_result()
         payload = {
             "contract_version": request.contract_version,
             "request_id": request_id,
@@ -609,6 +703,15 @@ class BridgeClient:
             return None
         if not isinstance(payload, dict):
             return None
+        if _is_unauthorized_envelope(response, payload):
+            return BridgeHealthResult(
+                False,
+                self.base_url,
+                "unauthorized",
+                "Bridge rejected the configured authentication.",
+                contract_version=payload["contract_version"],
+                error_code="UNAUTHORIZED",
+            )
         if payload.get("contract_version") != BRIDGE_CONTRACT_VERSION or payload.get("service") != BRIDGE_SERVICE:
             return None
         status = payload.get("status")

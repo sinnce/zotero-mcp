@@ -1,6 +1,8 @@
 import dataclasses
+import errno
 import hashlib
 import os
+import stat
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -11,7 +13,10 @@ from zotero_mcp.acquisition.bridge_client import (
     ARTIFACT_MISSING,
     ARTIFACT_NOT_REGULAR,
     ARTIFACT_SIZE_MISMATCH,
+    ARTIFACT_SNAPSHOT_FAILED,
+    ARTIFACT_UNREADABLE,
     ARTIFACT_UNVERIFIABLE,
+    BridgeHealthResult,
     snapshot_bridge_artifact,
     verify_bridge_artifact,
 )
@@ -20,6 +25,7 @@ from zotero_mcp.acquisition.types import AccessLocation, AccessResolution, Inges
 from zotero_mcp.tools.acquire_paper import acquire_paper
 
 CONTENT = b"%PDF-1.7 bridge integrity fixture\n"
+READY_HEALTH = BridgeHealthResult(True, "http://127.0.0.1:9870", "ready", "Bridge is ready.")
 
 
 def _tamper_hash(result):
@@ -134,6 +140,71 @@ def test_snapshot_refuses_to_follow_or_overwrite_existing_entry(bridge_artifact,
     assert victim.read_bytes() == b"keep"
 
 
+def _fail_open_of(path, error_number):
+    real_open = os.open
+
+    def _open(file, flags, *args, **kwargs):
+        if os.fspath(file) == path:
+            raise OSError(error_number, os.strerror(error_number), path)
+        return real_open(file, flags, *args, **kwargs)
+
+    return _open
+
+
+@pytest.mark.parametrize(
+    ("error_number", "error_code"),
+    [
+        pytest.param(errno.EACCES, ARTIFACT_UNREADABLE, id="eacces"),
+        pytest.param(errno.EPERM, ARTIFACT_UNREADABLE, id="eperm"),
+        pytest.param(errno.EIO, ARTIFACT_UNREADABLE, id="eio"),
+        pytest.param(errno.EMFILE, ARTIFACT_UNREADABLE, id="emfile"),
+        # A symlink swapped in after lstat, or a socket node, is non-regular.
+        pytest.param(errno.ELOOP, ARTIFACT_NOT_REGULAR, id="eloop"),
+        pytest.param(errno.ENXIO, ARTIFACT_NOT_REGULAR, id="enxio"),
+    ],
+)
+def test_open_failures_are_classified_by_cause(bridge_artifact, tmp_path, monkeypatch, error_number, error_code):
+    result = bridge_artifact(content=CONTENT)
+    dest = tmp_path / "private"
+    dest.mkdir()
+    monkeypatch.setattr(os, "open", _fail_open_of(result.file_path, error_number))
+
+    assert verify_bridge_artifact(result) == error_code
+    assert snapshot_bridge_artifact(result, dest) == (error_code, None)
+    assert list(dest.iterdir()) == []
+
+
+def test_real_unreadable_regular_file_is_not_classified_as_non_regular(bridge_artifact):
+    result = bridge_artifact(content=CONTENT)
+    os.chmod(result.file_path, 0)
+    try:
+        error_code = verify_bridge_artifact(result)
+    finally:
+        os.chmod(result.file_path, stat.S_IRUSR | stat.S_IWUSR)
+
+    # A privileged runner can still read the file; nobody may call it non-regular.
+    assert error_code in ({None} if os.geteuid() == 0 else {ARTIFACT_UNREADABLE})
+
+
+def test_snapshot_destination_failure_has_its_own_code(bridge_artifact, tmp_path):
+    result = bridge_artifact(content=CONTENT)
+    dest = tmp_path / "private"
+    dest.mkdir()
+    victim = tmp_path / "victim"
+    victim.write_bytes(b"keep")
+    (dest / "paper.pdf").symlink_to(victim)
+
+    assert snapshot_bridge_artifact(result, dest) == (ARTIFACT_SNAPSHOT_FAILED, None)
+    assert victim.read_bytes() == b"keep"
+    assert (dest / "paper.pdf").is_symlink()
+
+
+def test_snapshot_into_missing_destination_is_not_an_artifact_read_failure(bridge_artifact, tmp_path):
+    result = bridge_artifact(content=CONTENT)
+
+    assert snapshot_bridge_artifact(result, tmp_path / "absent") == (ARTIFACT_SNAPSHOT_FAILED, None)
+
+
 def _institutional_resolution() -> AccessResolution:
     location = AccessLocation(
         url="https://publisher.example/paper.pdf",
@@ -194,7 +265,7 @@ async def _acquire(resolution, config, bridge_result, auto_ingest=True, ingest_s
         ) as ingest,
     ):
         bridge = MagicMock()
-        bridge.is_available = AsyncMock(return_value=True)
+        bridge.health = AsyncMock(return_value=READY_HEALTH)
         bridge.download = AsyncMock(return_value=bridge_result)
         bridge_class.return_value = bridge
         result = await acquire_paper("10.1000/example", session_name="campus", auto_ingest=auto_ingest)
@@ -333,3 +404,71 @@ async def test_acquire_leaves_no_snapshot_after_rejected_artifact(
     assert result["error_code"] == ARTIFACT_HASH_MISMATCH
     ingest.assert_not_called()
     assert list(snapshot_root.iterdir()) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("make_resolution", "config"), ROUTES)
+async def test_acquire_classifies_unreadable_bridge_artifact(bridge_artifact, make_resolution, config, monkeypatch):
+    bridge_result = bridge_artifact(content=CONTENT)
+    monkeypatch.setattr(os, "open", _fail_open_of(bridge_result.file_path, errno.EACCES))
+
+    result, ingest, downloader_class, _ = await _acquire(make_resolution(), config, bridge_result)
+
+    assert result["status"] == "failed"
+    assert result["error_code"] == ARTIFACT_UNREADABLE
+    ingest.assert_not_called()
+    downloader_class.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("make_resolution", "config"), ROUTES)
+@pytest.mark.parametrize(
+    "replace",
+    [
+        pytest.param(_rewrite_in_place, id="rewrite-in-place"),
+        pytest.param(_replace_by_rename, id="rename-over"),
+        pytest.param(_replace_by_symlink, id="symlink-swap"),
+        pytest.param(os.unlink, id="expired"),
+    ],
+)
+async def test_acquire_without_ingest_returns_caller_owned_verified_copy(
+    bridge_artifact, make_resolution, config, tmp_path, monkeypatch, replace
+):
+    caller_root = tmp_path / "caller"
+    caller_root.mkdir()
+    monkeypatch.setattr("tempfile.tempdir", str(caller_root))
+    bridge_result = bridge_artifact(content=CONTENT)
+
+    result, ingest, downloader_class, _ = await _acquire(make_resolution(), config, bridge_result, auto_ingest=False)
+
+    assert result["status"] == "complete"
+    returned = Path(result["file_path"])
+    assert str(returned) != bridge_result.file_path
+    assert returned.is_relative_to(caller_root)
+    assert returned.name == "paper.pdf"
+    assert not returned.is_symlink()
+    assert os.stat(returned).st_mode & 0o777 == 0o600
+    assert os.stat(returned.parent).st_mode & 0o777 == 0o700
+    # The bridge may replace or expire its staged file afterwards; the
+    # caller's copy keeps exactly the verified bytes.
+    replace(bridge_result.file_path)
+    assert returned.read_bytes() == CONTENT
+    ingest.assert_not_called()
+    downloader_class.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("make_resolution", "config"), ROUTES)
+async def test_acquire_without_ingest_leaves_no_copy_after_rejected_artifact(
+    bridge_artifact, make_resolution, config, tmp_path, monkeypatch
+):
+    caller_root = tmp_path / "caller"
+    caller_root.mkdir()
+    monkeypatch.setattr("tempfile.tempdir", str(caller_root))
+    bridge_result = _tamper_hash(bridge_artifact(content=CONTENT))
+
+    result, ingest, _, _ = await _acquire(make_resolution(), config, bridge_result, auto_ingest=False)
+
+    assert result["error_code"] == ARTIFACT_HASH_MISMATCH
+    ingest.assert_not_called()
+    assert list(caller_root.iterdir()) == []

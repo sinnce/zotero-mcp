@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from zotero_mcp.acquisition.bridge_client import BridgeDownloadResult
+from zotero_mcp.acquisition.bridge_client import BridgeDownloadResult, BridgeHealthResult
 from zotero_mcp.acquisition.config import AcquisitionConfig, InstitutionalConfig
 from zotero_mcp.acquisition.types import (
     AccessLocation,
@@ -14,6 +14,8 @@ from zotero_mcp.acquisition.types import (
     IngestResult,
 )
 from zotero_mcp.tools.acquire_paper import acquire_paper
+
+READY_HEALTH = BridgeHealthResult(True, "http://127.0.0.1:9870", "ready", "Bridge is ready.")
 
 
 @pytest.fixture
@@ -265,7 +267,7 @@ class TestAcquireIngest:
             patch("zotero_mcp.tools.acquire_paper.BridgeClient") as MockBridge,
         ):
             mock_bridge = MagicMock()
-            mock_bridge.is_available = AsyncMock(return_value=True)
+            mock_bridge.health = AsyncMock(return_value=READY_HEALTH)
             mock_bridge.download = AsyncMock(return_value=direct_result)
             MockBridge.return_value = mock_bridge
 
@@ -305,7 +307,7 @@ class TestAcquireIngest:
             patch("zotero_mcp.tools.acquire_paper.BridgeClient") as MockBridge,
         ):
             mock_bridge = MagicMock()
-            mock_bridge.is_available = AsyncMock(return_value=True)
+            mock_bridge.health = AsyncMock(return_value=READY_HEALTH)
             mock_bridge.download = AsyncMock(side_effect=[direct_result, proxy_result])
             MockBridge.return_value = mock_bridge
 
@@ -344,7 +346,7 @@ class TestAcquireIngest:
             patch("zotero_mcp.tools.acquire_paper.BridgeClient") as MockBridge,
         ):
             mock_bridge = MagicMock()
-            mock_bridge.is_available = AsyncMock(return_value=True)
+            mock_bridge.health = AsyncMock(return_value=READY_HEALTH)
             mock_bridge.download = AsyncMock(side_effect=[direct_result, proxy_result])
             MockBridge.return_value = mock_bridge
 
@@ -376,7 +378,7 @@ class TestAcquireIngest:
             patch("zotero_mcp.tools.acquire_paper.BridgeClient") as MockBridge,
         ):
             mock_bridge = MagicMock()
-            mock_bridge.is_available = AsyncMock(return_value=True)
+            mock_bridge.health = AsyncMock(return_value=READY_HEALTH)
             mock_bridge.download = AsyncMock(return_value=bridge_result)
             MockBridge.return_value = mock_bridge
 
