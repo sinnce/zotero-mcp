@@ -121,7 +121,7 @@ def test_download_accepts_exact_v2_error_envelopes(payload, status, auth_state, 
 )
 def test_download_rejects_invalid_v2_success_payloads(payload):
     result = _download(payload)
-    assert result.error_code == "BRIDGE_UNAVAILABLE"
+    assert result.error_code == "BRIDGE_RESPONSE_INVALID"
 
 
 @pytest.mark.parametrize(
@@ -134,10 +134,10 @@ def test_download_rejects_invalid_v2_success_payloads(payload):
 )
 def test_download_rejects_http_or_message_contract_drift(payload, status_code):
     result = _download(payload, status_code)
-    assert result.error_code == "BRIDGE_UNAVAILABLE"
+    assert result.error_code == "BRIDGE_RESPONSE_INVALID"
 
 
 def test_unauthorized_error_must_not_echo_request_id():
     payload = _error("UNAUTHORIZED", "failed", "unchecked", "Authentication required.", request_id=REQUEST_ID)
     result = _download(payload, 401)
-    assert result.error_code == "BRIDGE_UNAVAILABLE"
+    assert result.error_code == "BRIDGE_RESPONSE_INVALID"

@@ -35,8 +35,8 @@ def test_download_rejects_typed_bodies_from_non_200_responses(response):
 
     assert result.status == "failed"
     assert result.auth_state == "missing"
-    assert result.error_code == "BRIDGE_UNAVAILABLE"
-    assert result.message == "Bridge is unavailable"
+    assert result.error_code == "BRIDGE_RESPONSE_INVALID"
+    assert result.message == "Bridge returned an invalid download response"
 
 
 def test_download_maps_timeout_exception_to_timeout():
@@ -51,15 +51,15 @@ def test_download_maps_timeout_exception_to_timeout():
 
 
 @pytest.mark.parametrize("error", [httpx.ConnectError("connect"), httpx.ReadError("read")])
-def test_download_maps_non_timeout_http_errors_to_bridge_unavailable(error):
+def test_download_maps_non_timeout_http_errors_to_bridge_unreachable(error):
     client = BridgeClient(auth_token="test-token-that-is-long-enough-for-the-contract")
     request = BridgeDownloadRequest("10.1000/example", "https://publisher.example/paper.pdf", "campus")
 
     with patch("zotero_mcp.acquisition.bridge_client.httpx.post", side_effect=error):
         result = client.download(request)
 
-    assert result.error_code == "BRIDGE_UNAVAILABLE"
-    assert result.message == "Bridge is unavailable"
+    assert result.error_code == "BRIDGE_UNREACHABLE"
+    assert result.message == "Bridge is unreachable"
 
 
 _FAILED_STATE_MATRIX = {
@@ -89,4 +89,4 @@ def test_download_rejects_invalid_failed_state_combinations(error_code, auth_sta
 
     assert result.status == "failed"
     assert result.auth_state == "missing"
-    assert result.error_code == "BRIDGE_UNAVAILABLE"
+    assert result.error_code == "BRIDGE_RESPONSE_INVALID"

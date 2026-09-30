@@ -303,6 +303,7 @@ async def test_bridge_institutional(bridge_artifact, tmp_path, monkeypatch):
         patch("zotero_mcp.tools.acquire_paper.BridgeClient") as MockBridgeClient,
     ):
         mock_bridge = MagicMock()
+        mock_bridge.configured = True
         mock_bridge.health = AsyncMock(return_value=READY_HEALTH)
         mock_bridge.download = AsyncMock(return_value=bridge_result)
         MockBridgeClient.return_value = mock_bridge

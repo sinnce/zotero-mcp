@@ -267,6 +267,7 @@ class TestAcquireIngest:
             patch("zotero_mcp.tools.acquire_paper.BridgeClient") as MockBridge,
         ):
             mock_bridge = MagicMock()
+            mock_bridge.configured = True
             mock_bridge.health = AsyncMock(return_value=READY_HEALTH)
             mock_bridge.download = AsyncMock(return_value=direct_result)
             MockBridge.return_value = mock_bridge
@@ -307,6 +308,7 @@ class TestAcquireIngest:
             patch("zotero_mcp.tools.acquire_paper.BridgeClient") as MockBridge,
         ):
             mock_bridge = MagicMock()
+            mock_bridge.configured = True
             mock_bridge.health = AsyncMock(return_value=READY_HEALTH)
             mock_bridge.download = AsyncMock(side_effect=[direct_result, proxy_result])
             MockBridge.return_value = mock_bridge
@@ -346,6 +348,7 @@ class TestAcquireIngest:
             patch("zotero_mcp.tools.acquire_paper.BridgeClient") as MockBridge,
         ):
             mock_bridge = MagicMock()
+            mock_bridge.configured = True
             mock_bridge.health = AsyncMock(return_value=READY_HEALTH)
             mock_bridge.download = AsyncMock(side_effect=[direct_result, proxy_result])
             MockBridge.return_value = mock_bridge
@@ -378,6 +381,7 @@ class TestAcquireIngest:
             patch("zotero_mcp.tools.acquire_paper.BridgeClient") as MockBridge,
         ):
             mock_bridge = MagicMock()
+            mock_bridge.configured = True
             mock_bridge.health = AsyncMock(return_value=READY_HEALTH)
             mock_bridge.download = AsyncMock(return_value=bridge_result)
             MockBridge.return_value = mock_bridge

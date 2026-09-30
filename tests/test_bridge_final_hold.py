@@ -84,7 +84,7 @@ def test_success_with_malformed_final_url_port_is_rejected(port):
     result = _download_with_final_url(f"https://publisher.example:{port}/paper.pdf")
 
     assert result.status == "failed"
-    assert result.error_code == "BRIDGE_UNAVAILABLE"
+    assert result.error_code == "BRIDGE_RESPONSE_INVALID"
     assert result.file_path is None
 
 
@@ -102,8 +102,9 @@ def test_candidate_url_with_malformed_port_fails_closed_before_transport(port):
     with patch("zotero_mcp.acquisition.bridge_client.httpx.post") as post:
         result = BridgeClient(auth_token=TOKEN).download(_request(f"https://publisher.example:{port}/paper.pdf"))
 
+    # new URL() throws on these ports, which the server reports as INVALID_REQUEST.
     assert result.status == "failed"
-    assert result.error_code == "DOMAIN_BLOCKED"
+    assert result.error_code == "INVALID_REQUEST"
     post.assert_not_called()
 
 

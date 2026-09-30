@@ -8,8 +8,10 @@ import pytest
 
 from zotero_mcp.acquisition.bridge_client import (
     BRIDGE_CONTRACT_VERSION,
-    BRIDGE_REQUEST_INVALID,
+    BRIDGE_HEALTH_INVALID,
+    BRIDGE_RESPONSE_INVALID,
     BRIDGE_SERVICE,
+    BRIDGE_UNREACHABLE,
     BridgeClient,
     BridgeDownloadRequest,
 )
@@ -62,70 +64,93 @@ def _ready_health() -> dict:
 
 
 INVALID_FIELDS = [
-    pytest.param({"doi": ""}, id="doi-empty"),
-    pytest.param({"doi": "1" * 513}, id="doi-over-512-code-points"),
-    pytest.param({"doi": "10.1000/\ud800"}, id="doi-lone-surrogate"),
-    pytest.param({"doi": None}, id="doi-none"),
-    pytest.param({"doi": 101000}, id="doi-not-string"),
-    pytest.param({"session_name": ""}, id="session-empty"),
-    pytest.param({"session_name": "Campus"}, id="session-uppercase"),
-    pytest.param({"session_name": "-campus"}, id="session-leading-dash"),
-    pytest.param({"session_name": ".campus"}, id="session-leading-dot"),
-    pytest.param({"session_name": "campus\n"}, id="session-trailing-newline"),
-    pytest.param({"session_name": "camp us"}, id="session-space"),
-    pytest.param({"session_name": "a" * 129}, id="session-over-128"),
-    pytest.param({"session_name": None}, id="session-none"),
-    pytest.param({"expected_artifact": "html"}, id="artifact-html"),
-    pytest.param({"expected_artifact": "PDF"}, id="artifact-uppercase"),
-    pytest.param({"expected_artifact": None}, id="artifact-none"),
-    pytest.param({"timeout_ms": 999}, id="timeout-below-min"),
-    pytest.param({"timeout_ms": 300001}, id="timeout-above-max"),
-    pytest.param({"timeout_ms": 0}, id="timeout-zero"),
-    pytest.param({"timeout_ms": -1}, id="timeout-negative"),
-    pytest.param({"timeout_ms": True}, id="timeout-bool"),
-    pytest.param({"timeout_ms": 60000.0}, id="timeout-float"),
-    pytest.param({"timeout_ms": "60000"}, id="timeout-string"),
-    pytest.param({"timeout_ms": None}, id="timeout-none"),
-    pytest.param({"request_id": "not-a-uuid"}, id="request-id-not-uuid"),
-    pytest.param({"request_id": f"{REQUEST_ID}\n"}, id="request-id-trailing-newline"),
-    pytest.param({"contract_version": "1.0.0"}, id="contract-legacy"),
-    pytest.param({"allowed_domains": "publisher.example"}, id="allowed-domains-string"),
-    pytest.param({"allowed_domains": [1]}, id="allowed-domains-non-string"),
-    pytest.param({"allowed_domains": []}, id="allowed-domains-empty"),
-    pytest.param({"allowed_domains": ()}, id="allowed-domains-empty-tuple"),
+    pytest.param({"doi": ""}, "INVALID_REQUEST", id="doi-empty"),
+    pytest.param({"doi": "1" * 513}, "INVALID_REQUEST", id="doi-over-512-code-points"),
+    pytest.param({"doi": "10.1000/\ud800"}, "INVALID_REQUEST", id="doi-lone-surrogate"),
+    pytest.param({"doi": None}, "INVALID_REQUEST", id="doi-none"),
+    pytest.param({"doi": 101000}, "INVALID_REQUEST", id="doi-not-string"),
+    pytest.param({"session_name": ""}, "INVALID_REQUEST", id="session-empty"),
+    pytest.param({"session_name": "Campus"}, "INVALID_REQUEST", id="session-uppercase"),
+    pytest.param({"session_name": "-campus"}, "INVALID_REQUEST", id="session-leading-dash"),
+    pytest.param({"session_name": ".campus"}, "INVALID_REQUEST", id="session-leading-dot"),
+    pytest.param({"session_name": "campus\n"}, "INVALID_REQUEST", id="session-trailing-newline"),
+    pytest.param({"session_name": "camp us"}, "INVALID_REQUEST", id="session-space"),
+    pytest.param({"session_name": "a" * 129}, "INVALID_REQUEST", id="session-over-128"),
+    pytest.param({"session_name": None}, "INVALID_REQUEST", id="session-none"),
+    pytest.param({"expected_artifact": "html"}, "INVALID_REQUEST", id="artifact-html"),
+    pytest.param({"expected_artifact": "PDF"}, "INVALID_REQUEST", id="artifact-uppercase"),
+    pytest.param({"expected_artifact": None}, "INVALID_REQUEST", id="artifact-none"),
+    pytest.param({"timeout_ms": 999}, "INVALID_REQUEST", id="timeout-below-min"),
+    pytest.param({"timeout_ms": 300001}, "INVALID_REQUEST", id="timeout-above-max"),
+    pytest.param({"timeout_ms": 0}, "INVALID_REQUEST", id="timeout-zero"),
+    pytest.param({"timeout_ms": -1}, "INVALID_REQUEST", id="timeout-negative"),
+    pytest.param({"timeout_ms": True}, "INVALID_REQUEST", id="timeout-bool"),
+    pytest.param({"timeout_ms": 60000.5}, "INVALID_REQUEST", id="timeout-fractional-float"),
+    pytest.param({"timeout_ms": "60000"}, "INVALID_REQUEST", id="timeout-string"),
+    pytest.param({"timeout_ms": None}, "INVALID_REQUEST", id="timeout-none"),
+    pytest.param({"request_id": "not-a-uuid"}, "INVALID_REQUEST", id="request-id-not-uuid"),
+    pytest.param({"request_id": f"{REQUEST_ID}\n"}, "INVALID_REQUEST", id="request-id-trailing-newline"),
+    pytest.param({"contract_version": "1.0.0"}, "LEGACY_DISABLED", id="contract-legacy"),
+    pytest.param({"contract_version": "1.2"}, "LEGACY_DISABLED", id="contract-legacy-two-part"),
+    pytest.param({"contract_version": "3.0.0"}, "UNSUPPORTED_CONTRACT_VERSION", id="contract-unsupported"),
+    pytest.param({"contract_version": "1.0.0.0"}, "UNSUPPORTED_CONTRACT_VERSION", id="contract-four-part"),
+    pytest.param({"allowed_domains": "publisher.example"}, "INVALID_REQUEST", id="allowed-domains-string"),
+    pytest.param({"allowed_domains": [1]}, "INVALID_REQUEST", id="allowed-domains-non-string"),
+    pytest.param({"allowed_domains": []}, "INVALID_REQUEST", id="allowed-domains-empty"),
+    pytest.param({"allowed_domains": ()}, "INVALID_REQUEST", id="allowed-domains-empty-tuple"),
     pytest.param(
         {"allowed_domains": ["publisher.example", *(f"extra{i}.example" for i in range(32))]},
+        "INVALID_REQUEST",
         id="allowed-domains-over-32",
     ),
-    pytest.param({"allowed_domains": ["publisher.example", ""]}, id="allowed-domains-empty-entry"),
-    pytest.param({"allowed_domains": ["publisher.example", None]}, id="allowed-domains-none-entry"),
-    pytest.param({"allowed_domains": ["publisher.example", "bad domain"]}, id="allowed-domains-space"),
-    pytest.param({"allowed_domains": [" publisher.example"]}, id="allowed-domains-leading-space"),
-    pytest.param({"allowed_domains": ["publisher.example\n"]}, id="allowed-domains-trailing-newline"),
-    pytest.param({"allowed_domains": ["publisher.example", "caf\u00e9.example"]}, id="allowed-domains-non-ascii"),
+    pytest.param({"allowed_domains": ["publisher.example", ""]}, "INVALID_REQUEST", id="allowed-domains-empty-entry"),
+    pytest.param({"allowed_domains": ["publisher.example", None]}, "INVALID_REQUEST", id="allowed-domains-none-entry"),
+    pytest.param(
+        {"allowed_domains": ["publisher.example", "bad domain"]}, "INVALID_REQUEST", id="allowed-domains-space"
+    ),
+    pytest.param({"allowed_domains": [" publisher.example"]}, "INVALID_REQUEST", id="allowed-domains-leading-space"),
+    pytest.param(
+        {"allowed_domains": ["publisher.example\n"]}, "INVALID_REQUEST", id="allowed-domains-trailing-newline"
+    ),
+    pytest.param(
+        {"allowed_domains": ["publisher.example", "caf\u00e9.example"]},
+        "INVALID_REQUEST",
+        id="allowed-domains-non-ascii",
+    ),
     pytest.param(
         {"allowed_domains": ["publisher.example", "a" * 63 + "." + "b" * 63 + "." + "c" * 63 + "." + "d" * 62]},
+        "INVALID_REQUEST",
         id="allowed-domains-entry-over-253",
     ),
-    pytest.param({"allowed_domains": ["publisher.example", "127.0.0.1"]}, id="allowed-domains-ip"),
-    pytest.param({"allowed_domains": ["publisher.example", "*.example.com"]}, id="allowed-domains-wildcard"),
-    pytest.param({"allowed_domains": ["publisher.example", "example.com/"]}, id="allowed-domains-path"),
-    pytest.param({"allowed_domains": ["publisher.example", "localhost"]}, id="allowed-domains-single-label"),
-    pytest.param({"allowed_domains": ["publisher.example."]}, id="allowed-domains-trailing-dot"),
+    pytest.param({"allowed_domains": ["publisher.example", "127.0.0.1"]}, "DOMAIN_BLOCKED", id="allowed-domains-ip"),
+    pytest.param(
+        {"allowed_domains": ["publisher.example", "*.example.com"]}, "DOMAIN_BLOCKED", id="allowed-domains-wildcard"
+    ),
+    pytest.param(
+        {"allowed_domains": ["publisher.example", "example.com/"]}, "DOMAIN_BLOCKED", id="allowed-domains-path"
+    ),
+    pytest.param(
+        {"allowed_domains": ["publisher.example", "localhost"]}, "DOMAIN_BLOCKED", id="allowed-domains-single-label"
+    ),
+    pytest.param({"allowed_domains": ["publisher.example."]}, "DOMAIN_BLOCKED", id="allowed-domains-trailing-dot"),
     pytest.param(
         {"allowed_domains": ["publisher.example", "Publisher.EXAMPLE"]},
+        "DOMAIN_BLOCKED",
         id="allowed-domains-case-insensitive-duplicate",
     ),
 ]
 
 
-@pytest.mark.parametrize("overrides", INVALID_FIELDS)
-def test_invalid_request_fields_fail_closed_before_transport(overrides):
+@pytest.mark.parametrize(("overrides", "error_code"), INVALID_FIELDS)
+def test_invalid_request_fields_fail_closed_before_transport(overrides, error_code):
+    # The client refuses with the code the 2.0.0 server returns for the same
+    # payload (classifyVersion, then the request schema, then destination policy).
     with patch("zotero_mcp.acquisition.bridge_client.httpx.post") as post:
         result = BridgeClient(auth_token=TOKEN).download(_request(**overrides))
 
     assert result.status == "failed"
-    assert result.error_code == BRIDGE_REQUEST_INVALID
+    assert result.auth_state == "unchecked"
+    assert result.error_code == error_code
     assert result.request_id is None
     post.assert_not_called()
 
@@ -142,6 +167,8 @@ def test_invalid_request_fields_fail_closed_before_transport(overrides):
         pytest.param({"session_name": "libproxy-snu"}, id="session-dash"),
         pytest.param({"timeout_ms": 1000}, id="timeout-min"),
         pytest.param({"timeout_ms": 300000}, id="timeout-max"),
+        # zod z.number().int() accepts an integral float; JSON sends 60000.0.
+        pytest.param({"timeout_ms": 60000.0}, id="timeout-integral-float"),
         pytest.param({"allowed_domains": ("publisher.example",)}, id="allowed-domains-tuple"),
     ],
 )
@@ -229,8 +256,8 @@ def test_health_rejects_unauthorized_envelope_drift(status_code, payload):
         health = BridgeClient(auth_token=TOKEN).health()
 
     assert health.available is False
-    assert health.status == "unavailable"
-    assert health.error_code is None
+    assert health.status == "invalid"
+    assert health.error_code == BRIDGE_HEALTH_INVALID
 
 
 def _assert_token_absent(*values: object) -> None:
@@ -270,7 +297,8 @@ def test_token_never_appears_when_bridge_echoes_it(caplog):
         result = client.download(_request())
 
     assert health.available is False
-    assert result.error_code == "BRIDGE_UNAVAILABLE"
+    assert health.error_code == BRIDGE_HEALTH_INVALID
+    assert result.error_code == BRIDGE_RESPONSE_INVALID
     _assert_token_absent(health, result, client, caplog.text)
 
 
@@ -348,7 +376,8 @@ async def test_acquire_rejects_invalid_session_name_without_bridge_download_or_f
         result = await acquire_paper("10.1000/example", session_name="Campus Session")
 
     assert result["status"] == "failed"
-    assert f"[{BRIDGE_REQUEST_INVALID}]" in result["message"]
+    assert result["error_code"] == "INVALID_REQUEST"
+    assert "[INVALID_REQUEST]" in result["message"]
     post.assert_not_called()
     downloader_class.assert_not_called()
     _assert_token_absent(json.dumps(result), caplog.text)
@@ -373,11 +402,14 @@ async def test_acquire_output_and_logs_never_contain_token(monkeypatch, caplog, 
             "zotero_mcp.acquisition.bridge_client.httpx.post",
             side_effect=httpx.ConnectError(f"refused Authorization: Bearer {TOKEN}"),
         ),
-        patch("zotero_mcp.tools.acquire_paper.ArtifactDownloader", return_value=downloader),
+        patch("zotero_mcp.tools.acquire_paper.ArtifactDownloader", return_value=downloader) as downloader_class,
     ):
         result = await acquire_paper("10.1000/example", session_name="campus")
 
-    assert result["status"] == "complete"
+    # A configured bridge that cannot be reached is terminal: no direct HTTP.
+    assert result["status"] == "failed"
+    assert result["error_code"] == BRIDGE_UNREACHABLE
+    downloader_class.assert_not_called()
     _assert_token_absent(json.dumps(result), caplog.text)
 
 

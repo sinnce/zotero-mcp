@@ -4,25 +4,25 @@ import contextlib
 import errno
 import hashlib
 import hmac
-import ipaddress
 import os
 import re
 import stat
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
 from typing import Final, Literal
-from urllib.parse import parse_qsl, urlparse
+from urllib.parse import parse_qsl, urlsplit
 
 import httpx
+
+from . import bridge_policy
 
 BRIDGE_SERVER_URL = "http://127.0.0.1:9870"
 BRIDGE_CONTRACT_VERSION = "2.0.0"
 BRIDGE_SERVICE = "pkb-browser-bridge"
-_MAX_ALLOWED_DOMAINS = 32
-_MAX_DOMAIN_LENGTH = 253
+_MAX_ALLOWED_DOMAINS = bridge_policy.MAX_ALLOWED_DOMAINS
 _MAX_NESTED_URL_DEPTH = 2
+_NESTED_SCHEMES: Final[frozenset[str]] = frozenset({"http", "https"})
 _MAX_FILE_PATH_LENGTH = 4096
 _MAX_ARTIFACT_BYTES = 100 * 1024 * 1024
 _ARTIFACT_READ_CHUNK = 1024 * 1024
@@ -39,18 +39,19 @@ ARTIFACT_UNREADABLE = "ARTIFACT_UNREADABLE"
 ARTIFACT_SIZE_MISMATCH = "ARTIFACT_SIZE_MISMATCH"
 ARTIFACT_HASH_MISMATCH = "ARTIFACT_HASH_MISMATCH"
 ARTIFACT_SNAPSHOT_FAILED = "ARTIFACT_SNAPSHOT_FAILED"
-# Client-side rejection of a request that the 2.0.0 server schema would refuse.
-# It is emitted before any transport call and is not a bridge wire code.
-BRIDGE_REQUEST_INVALID = "BRIDGE_REQUEST_INVALID"
 # Client-side auth states, emitted before any transport call. The bridge is
 # BRIDGE_NOT_CONFIGURED when no token variable, BRIDGE_SERVER_URL or explicit
-# client argument names it, so acquisition may skip it for the independent
-# direct-download channel. A configured bridge whose token is missing or
-# malformed is BRIDGE_AUTH_INVALID, which is terminal and never a fallback.
+# client argument names it; only then may acquisition use the direct-download
+# channel. A configured bridge whose token is missing or malformed is
+# BRIDGE_AUTH_INVALID.
 BRIDGE_NOT_CONFIGURED = "BRIDGE_NOT_CONFIGURED"
 BRIDGE_AUTH_INVALID = "BRIDGE_AUTH_INVALID"
+# Client-side transport and contract failures of a configured bridge. None of
+# them is a bridge wire code, and none of them permits another channel.
+BRIDGE_UNREACHABLE = "BRIDGE_UNREACHABLE"
+BRIDGE_HEALTH_INVALID = "BRIDGE_HEALTH_INVALID"
+BRIDGE_RESPONSE_INVALID = "BRIDGE_RESPONSE_INVALID"
 _BRIDGE_TOKEN_ENV: Final[tuple[str, ...]] = ("ZOTERO_BRIDGE_TOKEN", "BRIDGE_AUTH_TOKEN", "BRIDGE_TOKEN")
-_MAX_PORT = 65535
 # open(2) errors that mean the staged path is not a regular file: a symlink
 # swapped in after lstat (O_NOFOLLOW) or a socket/device node.
 _NOT_REGULAR_OPEN_ERRNOS: Final[frozenset[int]] = frozenset({errno.ELOOP, errno.ENXIO})
@@ -118,17 +119,6 @@ _ERROR_STATUS: Final[dict[str, tuple[str, str]]] = {
     "SESSION_BUSY": ("failed", "busy"),
     "AUTH_AMBIGUOUS": ("failed", "ambiguous"),
 }
-# Request field bounds mirror bridgeDownloadRequestSchema in the server's
-# bridge-v2-contract.ts (contract 2.0.0).
-_MAX_DOI_CODE_POINTS = 512
-_SESSION_NAME_PATTERN = re.compile(r"[a-z0-9][a-z0-9._-]{0,127}")
-_EXPECTED_ARTIFACTS: Final[frozenset[str]] = frozenset({"pdf"})
-_MIN_TIMEOUT_MS = 1000
-_MAX_TIMEOUT_MS = 300000
-_DOMAIN_PATTERN = re.compile(
-    r"(?=.{1,253}\Z)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+"
-    r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\Z"
-)
 
 
 @dataclass
@@ -181,189 +171,73 @@ class BridgeHealthResult:
     ready_sessions: int | None = None
 
 
-def _normalize_domain(value: str) -> str | None:
-    value = value.strip().lower()
-    if value.endswith(".") or len(value) > _MAX_DOMAIN_LENGTH:
-        return None
-    if not _DOMAIN_PATTERN.fullmatch(value):
-        return None
-    try:
-        ipaddress.ip_address(value)
-    except ValueError:
-        return value
-    return None
+def _domain_or_none(value: str) -> str | None:
+    # A usable allowlist entry for a derived list: a hostname the server's
+    # isValidDomain accepts, lowercased as normalizeAllowedDomains stores it.
+    return value.lower() if bridge_policy.is_valid_domain(value) else None
 
 
-def _candidate_domains(candidate_url: str) -> list[str]:
+def _candidate_host(url: str) -> str | None:
+    # The candidate host is listed even when the server will refuse it: the
+    # destination check then reports the host (DOMAIN_BLOCKED) or scheme
+    # problem instead of an empty-allowlist schema error.
+    parsed = bridge_policy.parse_url(url) if bridge_policy.is_printable_ascii(url) else None
+    if parsed is None or parsed.host_needs_idna or not parsed.host:
+        return None
+    host = parsed.host.lower()
+    return host if len(host) <= bridge_policy.MAX_DOMAIN_LENGTH else None
+
+
+def _nested_host(url: str) -> str | None:
+    parsed = bridge_policy.parse_url(url) if bridge_policy.is_printable_ascii(url) else None
+    if parsed is None or parsed.host_needs_idna or parsed.scheme not in _NESTED_SCHEMES or not parsed.host:
+        return None
+    return _domain_or_none(parsed.host)
+
+
+def _derived_allowed_domains(candidate_url: object, extra_domains: str) -> list[str]:
+    """Compatibility allowlist for a request that does not name one.
+
+    The candidate host comes first, whatever its scheme, so truncation to the
+    schema maximum never drops it; ``url=`` redirect targets (http or https)
+    and ``BRIDGE_ALLOWED_DOMAINS`` entries follow, each only if the server
+    would accept it. The derived list is then checked by
+    ``bridge_policy.request_error`` like an explicit one.
+    """
     domains: list[str] = []
+    if not isinstance(candidate_url, str):
+        return domains
     pending = [(candidate_url, 0)]
     while pending:
         url, depth = pending.pop(0)
-        try:
-            parsed = urlparse(url)
-        except ValueError:
-            continue
-        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
-            continue
-        domain = _normalize_domain(parsed.hostname)
-        if domain and domain not in domains:
-            domains.append(domain)
+        host = _candidate_host(url) if depth == 0 else _nested_host(url)
+        if host and host not in domains:
+            domains.append(host)
         if depth < _MAX_NESTED_URL_DEPTH:
-            pending.extend(
-                (value, depth + 1)
-                for key, value in parse_qsl(parsed.query, keep_blank_values=False)
-                if key.lower() == "url"
-            )
-    return domains
-
-
-def _allowed_domains(
-    candidate_url: str,
-    extra_domains: str,
-    requested_domains: tuple[str, ...] | list[str] | None = None,
-) -> list[str]:
-    # An explicit request allowlist is authoritative. The derived candidate
-    # hosts are only a compatibility default for callers that do not provide
-    # one; the bridge server remains the final policy authority.
-    if requested_domains is not None:
-        # _is_valid_requested_domains checks the whole list before this point;
-        # an explicit list is never filtered or truncated into another one.
-        explicit = [_normalize_domain(value) for value in requested_domains]
-        return [domain for domain in explicit if domain] if None not in explicit else []
-    domains = _candidate_domains(candidate_url)
+            with contextlib.suppress(ValueError):
+                pending.extend(
+                    (value, depth + 1)
+                    for key, value in parse_qsl(urlsplit(url).query, keep_blank_values=False)
+                    if key.lower() == "url"
+                )
     for value in extra_domains.split(","):
-        domain = _normalize_domain(value)
+        domain = _domain_or_none(value.strip())
         if domain and domain not in domains:
             domains.append(domain)
     return domains[:_MAX_ALLOWED_DOMAINS]
 
 
 def _is_uuid(value: object) -> bool:
-    if not isinstance(value, str) or not re.fullmatch(
-        r"(?:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|"
-        r"00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)",
-        value,
-    ):
+    return isinstance(value, str) and bridge_policy.is_zod_uuid(value)
+
+
+def _is_final_url_allowed(value: object, allowed_domains: list[str]) -> bool:
+    # bridgeDownloadSuccessSchema accepts the URL; the allowlist match is a
+    # client-only guard (the server only returns URLs it navigated within it).
+    if not bridge_policy.is_valid_final_url(value):
         return False
-    try:
-        uuid.UUID(value)
-    except (ValueError, AttributeError, TypeError):
-        return False
-    return True
-
-
-def _has_valid_port(parsed) -> bool:
-    # WHATWG new URL(), the server's parser, accepts an empty port or ASCII
-    # digits (leading zeros allowed) up to 65535 and rejects anything else.
-    # Reading .port also raises for these on Python >= 3.12; the explicit
-    # digit check keeps older int() parsing ("+80", "8_0", " 80") out.
-    _, has_port, port = parsed.netloc.rpartition("@")[2].partition(":")
-    if has_port and port and not (port.isascii() and port.isdigit() and int(port) <= _MAX_PORT):
-        return False
-    try:
-        parsed.port
-    except ValueError:
-        return False
-    return True
-
-
-def _is_valid_final_url(value: object, allowed_domains: list[str]) -> bool:
-    if (
-        not isinstance(value, str)
-        or len(value) > 2048
-        or not re.fullmatch(r"[\x21-\x7e]+", value)
-        or re.search(r"%(?![0-9a-fA-F]{2})", value)
-    ):
-        return False
-    try:
-        parsed = urlparse(value)
-    except ValueError:
-        return False
-    host = _normalize_domain(parsed.hostname or "")
-    if not host or parsed.scheme.lower() != "https" or parsed.username or parsed.password or parsed.fragment:
-        return False
-    if not _has_valid_port(parsed):
-        return False
-    return host in allowed_domains or any(host.endswith(f".{domain}") for domain in allowed_domains)
-
-
-def _is_valid_candidate_url(value: object) -> bool:
-    if (
-        not isinstance(value, str)
-        or len(value) > 2048
-        or not re.fullmatch(r"[\x21-\x7e]+", value)
-        or re.search(r"%(?![0-9a-fA-F]{2})", value)
-    ):
-        return False
-    try:
-        parsed = urlparse(value)
-    except ValueError:
-        return False
-    host = _normalize_domain(parsed.hostname or "")
-    return bool(
-        host
-        and parsed.scheme.lower() == "https"
-        and not parsed.username
-        and not parsed.password
-        and not parsed.fragment
-        and _has_valid_port(parsed)
-    )
-
-
-def _is_valid_doi(value: object) -> bool:
-    # Python str length counts code points, matching the server's
-    # Array.from(value).length. Lone surrogates cannot be sent as UTF-8.
-    return (
-        isinstance(value, str)
-        and 1 <= len(value) <= _MAX_DOI_CODE_POINTS
-        and not any(0xD800 <= ord(char) <= 0xDFFF for char in value)
-    )
-
-
-def _is_valid_timeout_ms(value: object) -> bool:
-    return not isinstance(value, bool) and isinstance(value, int) and _MIN_TIMEOUT_MS <= value <= _MAX_TIMEOUT_MS
-
-
-def _is_valid_wire_domain(value: str) -> bool:
-    return 1 <= len(value) <= _MAX_DOMAIN_LENGTH and re.fullmatch(r"[\x21-\x7e]+", value) is not None
-
-
-def _is_valid_requested_domains(value: object) -> bool:
-    # The schema needs 1-32 printable entries of 1-253 characters; the server
-    # policy then rejects any entry that is not a hostname and any
-    # case-insensitive duplicate. Refuse the whole list instead of sending a
-    # filtered or truncated one.
-    if value is None:
-        return True
-    if not isinstance(value, (list, tuple)) or not 1 <= len(value) <= _MAX_ALLOWED_DOMAINS:
-        return False
-    seen: set[str] = set()
-    for domain in value:
-        if not isinstance(domain, str) or not _is_valid_wire_domain(domain):
-            return False
-        normalized = _normalize_domain(domain)
-        if normalized is None or normalized in seen:
-            return False
-        seen.add(normalized)
-    return True
-
-
-def _is_valid_request_fields(request: BridgeDownloadRequest) -> bool:
-    return (
-        request.contract_version == BRIDGE_CONTRACT_VERSION
-        and _is_uuid(request.request_id)
-        and _is_valid_doi(request.doi)
-        and isinstance(request.session_name, str)
-        and _SESSION_NAME_PATTERN.fullmatch(request.session_name) is not None
-        and isinstance(request.expected_artifact, str)
-        and request.expected_artifact in _EXPECTED_ARTIFACTS
-        and _is_valid_timeout_ms(request.timeout_ms)
-        and _is_valid_requested_domains(request.allowed_domains)
-    )
-
-
-def _is_valid_serialized_domains(domains: list[str]) -> bool:
-    return 1 <= len(domains) <= _MAX_ALLOWED_DOMAINS and all(_is_valid_wire_domain(domain) for domain in domains)
+    host = bridge_policy.final_url_hostname(value) if isinstance(value, str) else None
+    return host is not None and bridge_policy.host_matches(host.lower(), allowed_domains)
 
 
 def _is_unauthorized_envelope(response: httpx.Response, payload: dict) -> bool:
@@ -380,16 +254,6 @@ def _is_unauthorized_envelope(response: httpx.Response, payload: dict) -> bool:
         and payload.get("error_code") == "UNAUTHORIZED"
         and payload.get("message") == message
     )
-
-
-def _is_datetime(value: object) -> bool:
-    if not isinstance(value, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z", value):
-        return False
-    try:
-        datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        return False
-    return True
 
 
 def verify_bridge_artifact(result: BridgeDownloadResult) -> str | None:
@@ -562,17 +426,28 @@ class BridgeClient:
             message="Bridge authentication is missing or malformed",
         )
 
-    def _unavailable_result(self, message: str = "Bridge is unavailable") -> BridgeDownloadResult:
+    def _unreachable_result(self) -> BridgeDownloadResult:
         return BridgeDownloadResult(
-            status="failed", auth_state="missing", error_code="BRIDGE_UNAVAILABLE", message=message
+            status="failed", auth_state="missing", error_code=BRIDGE_UNREACHABLE, message="Bridge is unreachable"
         )
 
-    def _invalid_request_result(self) -> BridgeDownloadResult:
+    def _response_invalid_result(self) -> BridgeDownloadResult:
         return BridgeDownloadResult(
             status="failed",
-            auth_state="unchecked",
-            error_code=BRIDGE_REQUEST_INVALID,
-            message="Bridge request is invalid",
+            auth_state="missing",
+            error_code=BRIDGE_RESPONSE_INVALID,
+            message="Bridge returned an invalid download response",
+        )
+
+    def _refused_request_result(self, error_code: str) -> BridgeDownloadResult:
+        # The code, status, auth state and message the server would return
+        # for this payload; request_id stays None because nothing was sent.
+        status, auth_state = _ERROR_STATUS.get(error_code, ("failed", "unchecked"))
+        return BridgeDownloadResult(
+            status=status,  # type: ignore[arg-type]
+            auth_state=auth_state,  # type: ignore[arg-type]
+            error_code=error_code,
+            message=_ERROR_DETAILS[error_code][1],
         )
 
     def _timeout_result(self) -> BridgeDownloadResult:
@@ -632,12 +507,14 @@ class BridgeClient:
                 or len(payload["file_path"]) > _MAX_FILE_PATH_LENGTH
                 or not isinstance(payload.get("sha256"), str)
                 or not re.fullmatch(r"[0-9a-f]{64}", payload["sha256"])
+                # JSON.stringify never emits an integral float, so a strict
+                # int check is exact for what the server sends.
                 or isinstance(payload.get("size_bytes"), bool)
                 or not isinstance(payload.get("size_bytes"), int)
                 or not 1 <= payload["size_bytes"] <= _MAX_ARTIFACT_BYTES
                 or payload.get("content_type") != "application/pdf"
-                or not _is_valid_final_url(payload.get("final_url"), allowed_domains)
-                or not _is_datetime(payload.get("expires_at"))
+                or not _is_final_url_allowed(payload.get("final_url"), allowed_domains)
+                or not bridge_policy.is_zod_datetime(payload.get("expires_at"))
                 or payload.get("ack_required") is not True
                 or payload.get("error_code") is not None
             ):
@@ -690,43 +567,20 @@ class BridgeClient:
         headers = self._headers()
         if headers is None:
             return self._auth_unusable_result()
-        if not _is_valid_request_fields(request):
-            return self._invalid_request_result()
-        if not _is_valid_candidate_url(request.candidate_url):
-            return BridgeDownloadResult(
-                status="failed",
-                auth_state="missing",
-                error_code="DOMAIN_BLOCKED",
-                message="Candidate URL is not allowed",
+        # An explicit allowlist is authoritative and is checked whole: it is
+        # never filtered or truncated into another list.
+        allowed_domains: object
+        if request.allowed_domains is None:
+            allowed_domains = _derived_allowed_domains(
+                request.candidate_url, os.environ.get("BRIDGE_ALLOWED_DOMAINS", "")
             )
-        allowed_domains = _allowed_domains(
-            request.candidate_url,
-            os.environ.get("BRIDGE_ALLOWED_DOMAINS", ""),
-            request.allowed_domains,
-        )
-        candidate_host = _normalize_domain(urlparse(request.candidate_url).hostname or "")
-        if candidate_host is None or not any(
-            candidate_host == domain or candidate_host.endswith(f".{domain}") for domain in allowed_domains
-        ):
-            return BridgeDownloadResult(
-                status="failed",
-                auth_state="missing",
-                error_code="DOMAIN_BLOCKED",
-                message="Candidate URL is not allowed",
-            )
-        if not allowed_domains:
-            return BridgeDownloadResult(
-                status="failed",
-                auth_state="missing",
-                error_code="DOMAIN_BLOCKED",
-                message="Candidate URL has no allowed domain",
-            )
-        request_id = request.request_id
-        if not isinstance(request_id, str) or not _is_valid_serialized_domains(allowed_domains):
-            return self._invalid_request_result()
+        elif isinstance(request.allowed_domains, (list, tuple)):
+            allowed_domains = list(request.allowed_domains)
+        else:
+            allowed_domains = request.allowed_domains  # the schema check refuses it
         payload = {
             "contract_version": request.contract_version,
-            "request_id": request_id,
+            "request_id": request.request_id,
             "doi": request.doi,
             "candidate_url": request.candidate_url,
             "session_name": request.session_name,
@@ -734,6 +588,18 @@ class BridgeClient:
             "timeout_ms": request.timeout_ms,
             "allowed_domains": allowed_domains,
         }
+        # Refuse, with the server's own code, any payload the 2.0.0 server
+        # would refuse before browser work (version, schema, destination).
+        refused = bridge_policy.request_error(payload)
+        if refused is not None:
+            return self._refused_request_result(refused)
+        request_id = request.request_id
+        if not isinstance(request_id, str):  # unreachable: the schema requires a UUID string
+            return self._refused_request_result("INVALID_REQUEST")
+        # normalizeAllowedDomains lowercases every entry; the same list is
+        # sent and used to check the returned final_url.
+        sent_domains = [domain.lower() for domain in payload["allowed_domains"]]
+        payload["allowed_domains"] = sent_domains
         try:
             response = httpx.post(
                 f"{self.base_url}/bridge/download",
@@ -744,8 +610,8 @@ class BridgeClient:
         except httpx.TimeoutException:
             return self._timeout_result()
         except httpx.HTTPError:
-            return self._unavailable_result()
-        return self._parse_download_response(response, request_id, allowed_domains) or self._unavailable_result()
+            return self._unreachable_result()
+        return self._parse_download_response(response, request_id, sent_domains) or self._response_invalid_result()
 
     def health(self) -> BridgeHealthResult:
         headers = self._headers()
@@ -769,12 +635,20 @@ class BridgeClient:
             response = httpx.get(f"{self.base_url}/bridge/health/ready", headers=headers, timeout=2.0)
         except httpx.HTTPError as exc:
             return BridgeHealthResult(
-                False, self.base_url, "unavailable", f"Bridge health request failed: {exc.__class__.__name__}"
+                False,
+                self.base_url,
+                "unreachable",
+                f"Bridge health request failed: {exc.__class__.__name__}",
+                error_code=BRIDGE_UNREACHABLE,
             )
         parsed = self._parse_health_response(response)
         if parsed is None:
             return BridgeHealthResult(
-                False, self.base_url, "unavailable", "Bridge returned an invalid readiness response."
+                False,
+                self.base_url,
+                "invalid",
+                "Bridge returned an invalid readiness response.",
+                error_code=BRIDGE_HEALTH_INVALID,
             )
         return parsed
 

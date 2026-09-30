@@ -85,20 +85,24 @@ class FakeZotero:
             "extra": "",
         }
         if item_type in ("journalArticle", "preprint"):
-            base.update({
-                "publicationTitle": "",
-                "volume": "",
-                "issue": "",
-                "pages": "",
-                "ISSN": "",
-            })
+            base.update(
+                {
+                    "publicationTitle": "",
+                    "volume": "",
+                    "issue": "",
+                    "pages": "",
+                    "ISSN": "",
+                }
+            )
         if item_type == "book":
-            base.update({
-                "publisher": "",
-                "place": "",
-                "ISBN": "",
-                "numPages": "",
-            })
+            base.update(
+                {
+                    "publisher": "",
+                    "place": "",
+                    "ISBN": "",
+                    "numPages": "",
+                }
+            )
         return base
 
     def addto_collection(self, collection_key, items, **kwargs):
@@ -113,8 +117,7 @@ class FakeZotero:
         return method
 
     def collection_items(self, key, **kwargs):
-        return [it for it in self._items
-                if key in it.get("data", {}).get("collections", [])]
+        return [it for it in self._items if key in it.get("data", {}).get("collections", [])]
 
     def file(self, key, **kwargs):
         return b""
@@ -123,6 +126,7 @@ class FakeZotero:
         """Create a dummy file so code that checks os.path.exists passes."""
         if path and filename:
             import os
+
             filepath = os.path.join(path, filename)
             with open(filepath, "wb") as f:
                 f.write(b"%PDF-1.4 fake")
@@ -147,6 +151,23 @@ class _FakeResponse:
 @pytest.fixture
 def dummy_ctx():
     return DummyContext()
+
+
+# Whether the bridge is configured decides the acquisition channel, so no
+# test may inherit bridge settings from the developer environment.
+_BRIDGE_ENV_VARS = (
+    "BRIDGE_SERVER_URL",
+    "ZOTERO_BRIDGE_TOKEN",
+    "BRIDGE_AUTH_TOKEN",
+    "BRIDGE_TOKEN",
+    "BRIDGE_ALLOWED_DOMAINS",
+)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_bridge_env(monkeypatch):
+    for name in _BRIDGE_ENV_VARS:
+        monkeypatch.delenv(name, raising=False)
 
 
 @pytest.fixture

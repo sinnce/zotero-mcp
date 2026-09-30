@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from zotero_mcp.acquisition.bridge_client import BRIDGE_REQUEST_INVALID, BridgeDownloadResult, BridgeHealthResult
+from zotero_mcp.acquisition.bridge_client import BridgeDownloadResult, BridgeHealthResult
 from zotero_mcp.acquisition.config import AcquisitionConfig, InstitutionalConfig
 from zotero_mcp.acquisition.types import AccessLocation, AccessResolution
 from zotero_mcp.tools.acquire_paper import acquire_paper
@@ -34,7 +34,7 @@ def _resolution() -> AccessResolution:
         BridgeDownloadResult(status="failed", auth_state="interactive_required", error_code="CAPTCHA"),
         BridgeDownloadResult(status="failed", auth_state="ready", error_code="CANCELLED"),
         BridgeDownloadResult(status="failed", auth_state="unchecked", error_code="UNAUTHORIZED"),
-        BridgeDownloadResult(status="failed", auth_state="unchecked", error_code=BRIDGE_REQUEST_INVALID),
+        BridgeDownloadResult(status="failed", auth_state="unchecked", error_code="INVALID_REQUEST"),
     ],
 )
 async def test_terminal_bridge_results_do_not_start_direct_downloader(bridge_result):
@@ -45,6 +45,7 @@ async def test_terminal_bridge_results_do_not_start_direct_downloader(bridge_res
         patch("zotero_mcp.tools.acquire_paper.ArtifactDownloader") as downloader_class,
     ):
         bridge = MagicMock()
+        bridge.configured = True
         bridge.health = AsyncMock(return_value=READY_HEALTH)
         bridge.download = AsyncMock(return_value=bridge_result)
         bridge_class.return_value = bridge
@@ -52,6 +53,7 @@ async def test_terminal_bridge_results_do_not_start_direct_downloader(bridge_res
         result = await acquire_paper("10.1000/example", session_name="campus")
 
     assert result["status"] == "failed"
+    assert result["error_code"] == bridge_result.error_code
     assert bridge_result.error_code in result["message"]
     downloader_class.assert_not_called()
 
@@ -65,6 +67,7 @@ async def test_bridge_cancellation_propagates_without_starting_direct_downloader
         patch("zotero_mcp.tools.acquire_paper.ArtifactDownloader") as downloader_class,
     ):
         bridge = MagicMock()
+        bridge.configured = True
         bridge.health = AsyncMock(return_value=READY_HEALTH)
         bridge.download = AsyncMock(side_effect=asyncio.CancelledError())
         bridge_class.return_value = bridge
@@ -116,6 +119,7 @@ async def test_unauthorized_download_is_terminal_without_retry(config, make_reso
         patch("zotero_mcp.tools.acquire_paper.ArtifactDownloader") as downloader_class,
     ):
         bridge = MagicMock()
+        bridge.configured = True
         bridge.health = AsyncMock(return_value=READY_HEALTH)
         bridge.download = AsyncMock(return_value=unauthorized)
         bridge_class.return_value = bridge
@@ -146,6 +150,7 @@ async def test_unauthorized_health_is_terminal_without_download_or_fallback():
         patch("zotero_mcp.tools.acquire_paper.ArtifactDownloader") as downloader_class,
     ):
         bridge = MagicMock()
+        bridge.configured = True
         bridge.health = AsyncMock(return_value=unauthorized)
         bridge.download = AsyncMock()
         bridge_class.return_value = bridge

@@ -177,7 +177,7 @@ The ownership split is:
 - `zotero-mcp`: resolve access and decide whether a session-backed location should be used
 - `opencode-deep-research`: keep the named browser session alive and perform the download
 
-Bridge auth is now fail-closed. `GET /bridge/health` carries bearer auth only. `POST /bridge/download` carries bearer auth plus the required derived allowed-domain list. If the caller has no bridge configuration at all (none of `ZOTERO_BRIDGE_TOKEN`, `BRIDGE_AUTH_TOKEN`, `BRIDGE_TOKEN` or `BRIDGE_SERVER_URL` set), `zotero-mcp` skips bridge calls and stays on the standard direct-download path. Once any of those is set, a missing, empty or malformed token fails with `BRIDGE_AUTH_INVALID` and acquisition stops without falling back to direct HTTP.
+Bridge acquisition is fail-closed. `GET /bridge/health/ready` carries bearer auth only. `POST /bridge/download` carries bearer auth plus the required derived allowed-domain list. If the caller has no bridge configuration at all (none of `ZOTERO_BRIDGE_TOKEN`, `BRIDGE_AUTH_TOKEN`, `BRIDGE_TOKEN` or `BRIDGE_SERVER_URL` set), `zotero-mcp` makes no bridge calls and uses the standard direct-download path. Once any of those is set, the bridge is the only acquisition channel: a missing, empty or malformed token (`BRIDGE_AUTH_INVALID`), an unreachable bridge (`BRIDGE_UNREACHABLE`), a bridge that is not ready (`CAPABILITY_UNAVAILABLE`), an invalid readiness response (`BRIDGE_HEALTH_INVALID`) and every other bridge failure stop acquisition with that `error_code`, and the direct HTTP downloader is never used.
 
 ## 🧠 Semantic Search
 
@@ -457,7 +457,7 @@ The current source-level resolver flow is:
 2. if the input is a URL, optionally ask a running Zotero translation-server for metadata and PDF attachments,
 3. if the identifier becomes a DOI, try Unpaywall, then Semantic Scholar, then PMC OA,
 4. if institutional access is enabled, append the institutional location,
-5. if `acquire_paper` sees `requires_session=true` and you passed `session_name`, call the local bridge server before falling back to direct HTTP download.
+5. `acquire_paper` downloads the resolved location through the local bridge server when the bridge is configured (with no fallback: every bridge failure is terminal), and through direct HTTP only when the bridge is not configured.
 
 This decision logic lives in:
 
@@ -524,12 +524,12 @@ Operator notes:
 - Use a private secret store, service manager secret field, or local env file that is not committed. Do not put the token in docs, screenshots, shell history snippets, or tracked config.
 - Generate a token that is at least 32 characters long.
 - `BRIDGE_ALLOWED_DOMAINS` is an optional caller-side policy input for extra operator-approved domains. Candidate hosts and nested redirect targets are derived automatically.
-- A caller with no bridge configuration at all (none of `ZOTERO_BRIDGE_TOKEN`, `BRIDGE_AUTH_TOKEN`, `BRIDGE_TOKEN` or `BRIDGE_SERVER_URL` set) skips the bridge by design and makes no bridge request. That gives you a caller-first rollout path because direct HTTP acquisition still runs while the bridge remains opt-in.
-- Once any of those variables is set, the bridge counts as configured. A configured bridge whose token is empty, missing or malformed fails with `BRIDGE_AUTH_INVALID` before any request is sent, and acquisition stops there instead of switching to direct HTTP.
+- A caller with no bridge configuration at all (none of `ZOTERO_BRIDGE_TOKEN`, `BRIDGE_AUTH_TOKEN`, `BRIDGE_TOKEN` or `BRIDGE_SERVER_URL` set) skips the bridge by design and makes no bridge request. This is the only state in which `acquire_paper` uses direct HTTP acquisition.
+- Once any of those variables is set, the bridge counts as configured and becomes the only acquisition channel. A configured bridge whose token is empty, missing or malformed fails with `BRIDGE_AUTH_INVALID` before any request is sent; an unreachable, not ready or misbehaving bridge fails with its own code (see below). Acquisition never switches to direct HTTP or any other channel. Start the bridge server before setting the caller variables, and unset all of them to return to direct HTTP.
 
 #### Allowed-domain behavior
 
-The caller sends an explicit allowed-domain set on `POST /bridge/download`. `GET /bridge/health` uses bearer auth only. The bridge does not auto-trust arbitrary redirects.
+The caller sends an explicit allowed-domain set on `POST /bridge/download`. `GET /bridge/health/ready` uses bearer auth only. The bridge does not auto-trust arbitrary redirects.
 
 - Candidate hosts are derived from the requested `candidate_url`.
 - For LibProxy and similar nested redirectors, hosts are also derived from nested target URLs such as the `url=` value inside the proxy URL.
@@ -540,13 +540,27 @@ The caller sends an explicit allowed-domain set on `POST /bridge/download`. `GET
 **How it works:**
 
 1. `acquire_paper` calls `resolve_paper_access` to find the best URL for the identifier.
-2. If the resolved location requires a session and you pass `session_name`, it checks whether the bridge server is running at `http://127.0.0.1:9870` and sends bearer auth on that health check when `BRIDGE_AUTH_TOKEN` is configured.
-3. If the bridge is available and the caller has a token, it sends a `POST /bridge/download` request with the DOI, candidate URL, session name, and required allowed-domain set. The bridge server handles navigation and PDF download inside the named browser session.
-4. If `session_name` is omitted, the bridge is not configured, or a bridge with usable auth is unreachable or not ready, acquisition falls back to the standard HTTP download path. Nothing breaks; you just won't get paywalled PDFs.
-5. Auth failures on a configured bridge are terminal: if the bridge rejects the caller token (`UNAUTHORIZED`, on health or download) or the configured token is unusable (`BRIDGE_AUTH_INVALID`), acquisition stops with that `error_code` and does not retry or fall back to direct HTTP. A request that the 2.0.0 contract would refuse (for example a `session_name` outside `[a-z0-9][a-z0-9._-]{0,127}`, or an explicit `allowed_domains` list that is empty, has more than 32 entries, or has a malformed or duplicate entry) is rejected before it is sent with `BRIDGE_REQUEST_INVALID`, also without fallback. An explicit list is never filtered or truncated.
+2. If the bridge is not configured, the resolved URL is downloaded over direct HTTP and no bridge request is made.
+3. If the bridge is configured, the bridge is the only channel for every download, whatever the resolved location. `session_name` is required. `acquire_paper` first sends `GET /bridge/health/ready` with bearer auth to `BRIDGE_SERVER_URL` (default `http://127.0.0.1:9870`); when the bridge is ready, it sends a `POST /bridge/download` request with the DOI, candidate URL, session name, and required allowed-domain set. The bridge server handles navigation and PDF download inside the named browser session.
+4. Every failure of a configured bridge is terminal. Acquisition stops with the `error_code` below and never retries through, or falls back to, the direct HTTP downloader or any other channel:
+
+   | `error_code` | Meaning |
+   |---|---|
+   | `BRIDGE_AUTH_INVALID` | The bridge is configured but its token is missing, empty or malformed; nothing is sent. |
+   | `BRIDGE_SESSION_REQUIRED` | No `session_name` was passed; nothing is sent. |
+   | `UNAUTHORIZED` | The bridge rejected the caller token, on health or download. |
+   | `BRIDGE_UNREACHABLE` | The readiness or download request failed at the transport level (connection refused, DNS failure, readiness timeout). |
+   | `CAPABILITY_UNAVAILABLE` | The bridge answered that it is not ready. |
+   | `BRIDGE_HEALTH_INVALID` | The readiness response does not match the 2.0.0 contract. |
+   | `BRIDGE_RESPONSE_INVALID` | The download response does not match the 2.0.0 contract. |
+   | `TIMEOUT` | The download request exceeded its deadline. |
+   | `LEGACY_DISABLED`, `UNSUPPORTED_CONTRACT_VERSION`, `INVALID_REQUEST`, `URL_SCHEME_BLOCKED`, `DOMAIN_BLOCKED` | The request was refused before it was sent, with the code the 2.0.0 server returns for it (see step 5). |
+   | Any other bridge code (`NO_PDF`, `SESSION_BUSY`, `AUTH_REQUIRED`, ...) | Returned by the bridge and passed through. |
+
+5. A request that the 2.0.0 server would refuse is rejected before it is sent, with the same code and in the same check order as the server: an unsupported contract version gives `LEGACY_DISABLED` or `UNSUPPORTED_CONTRACT_VERSION`; a schema violation (for example a `session_name` outside `[a-z0-9][a-z0-9._-]{0,127}`, or an explicit `allowed_domains` list that is empty or has more than 32 entries), a DOI with leading or trailing whitespace, or a malformed candidate URL, or one with user info or a fragment, gives `INVALID_REQUEST`; a candidate URL that is not `https` gives `URL_SCHEME_BLOCKED`; an IP-address or malformed host, a malformed or duplicate allowlist entry, or a host outside the allowlist gives `DOMAIN_BLOCKED`. An explicit list is never filtered or truncated. The client is stricter than the server in one case: a candidate host that needs IDNA processing (a percent-encoded non-ASCII host or an `xn--` label) is refused with `DOMAIN_BLOCKED`.
 6. The returned `file_path` is never the bridge's staged file but a private copy (mode `0600` in a new temp directory) whose bytes matched the bridge-declared SHA-256 and size; the caller owns and deletes it. With `auto_ingest=true`, that same copy is the file ingested into Zotero, and it stays in place after the call returns. A staged artifact that fails verification returns an `ARTIFACT_*` error code instead: `ARTIFACT_NOT_REGULAR` only for a symlink, FIFO, socket, device or directory, `ARTIFACT_REPLACED` when a different regular file was swapped in during verification, and `ARTIFACT_UNREADABLE` when a regular file cannot be opened or read.
 
-For LibProxy, `acquire_paper` has one extra source-backed behavior: if the DOI resolved to a LibProxy URL and you provided `session_name`, it first tries direct browser navigation to `https://doi.org/{doi}` through the browser session. If that still lands on an explicit paywall, it retries through the proxied institutional URL.
+For LibProxy, `acquire_paper` has one extra source-backed behavior: if the DOI resolved to a LibProxy URL and you provided `session_name`, it first tries direct browser navigation to `https://doi.org/{doi}` through the browser session. If that still lands on an explicit paywall, it retries through the proxied institutional URL; any other failure of the direct attempt is terminal.
 
 **Usage example:**
 
@@ -580,7 +594,7 @@ When the input to `resolve_paper_access` is a URL, the resolver first checks whe
 |-------|-------|
 | Default base URL | `http://127.0.0.1:9870` |
 | Download endpoint | `POST /bridge/download` |
-| Health check | `GET /bridge/health` |
+| Health check | `GET /bridge/health/ready` (`/bridge/health` is an alias) |
 | Session identifier | `session_name` string (e.g. `"libproxy-snu"`) |
 | Caller auth env | `BRIDGE_AUTH_TOKEN`, same value as the bridge server |
 | Caller allowlist env | `BRIDGE_ALLOWED_DOMAINS`, optional comma-separated normalized extra hosts |

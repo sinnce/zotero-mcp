@@ -178,20 +178,21 @@ def test_explicit_allowlist_is_authoritative_and_serialized():
 
 
 @pytest.mark.parametrize(
-    "candidate_url",
+    ("candidate_url", "error_code"),
     [
-        "http://publisher.example/paper.pdf",
-        "https://127.0.0.1/paper.pdf",
-        "https://publisher.example./paper.pdf",
-        "https://user:password@publisher.example/paper.pdf",
-        "https://publisher.example/paper.pdf#fragment",
+        ("http://publisher.example/paper.pdf", "URL_SCHEME_BLOCKED"),
+        ("https://127.0.0.1/paper.pdf", "DOMAIN_BLOCKED"),
+        ("https://publisher.example./paper.pdf", "DOMAIN_BLOCKED"),
+        ("https://user:password@publisher.example/paper.pdf", "INVALID_REQUEST"),
+        ("https://publisher.example/paper.pdf#fragment", "INVALID_REQUEST"),
     ],
 )
-def test_candidate_url_policy_fails_closed_before_transport(candidate_url):
+def test_candidate_url_policy_fails_closed_before_transport(candidate_url, error_code):
+    # Same codes as validateBridgeDestination in bridge-v2-policy.ts.
     request = BridgeDownloadRequest("10.1000/example", candidate_url, "campus", request_id=REQUEST_ID)
     with patch("zotero_mcp.acquisition.bridge_client.httpx.post") as post:
         result = BridgeClient(auth_token=TOKEN).download(request)
-    assert result.error_code == "DOMAIN_BLOCKED"
+    assert result.error_code == error_code
     post.assert_not_called()
 
 
@@ -230,7 +231,7 @@ def test_download_rejects_malformed_or_incomplete_success():
             return_value=_response(200, payload),
         ):
             result = BridgeClient(auth_token=TOKEN).download(_request())
-        assert result.error_code == "BRIDGE_UNAVAILABLE"
+        assert result.error_code == "BRIDGE_RESPONSE_INVALID"
 
 
 def test_download_maps_timeout_and_transport_errors():
@@ -243,7 +244,7 @@ def test_download_maps_timeout_and_transport_errors():
         "zotero_mcp.acquisition.bridge_client.httpx.post",
         side_effect=httpx.ConnectError("connect"),
     ):
-        assert BridgeClient(auth_token=TOKEN).download(_request()).error_code == "BRIDGE_UNAVAILABLE"
+        assert BridgeClient(auth_token=TOKEN).download(_request()).error_code == "BRIDGE_UNREACHABLE"
 
 
 def test_ready_health_requires_v2_capabilities_and_auth():

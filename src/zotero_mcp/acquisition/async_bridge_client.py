@@ -16,6 +16,11 @@ class AsyncBridgeClient:
     def __init__(self, base_url: str | None = None, auth_token: str | None = None):
         self._sync_client = BridgeClient(base_url=base_url, auth_token=auth_token)
 
+    @property
+    def configured(self) -> bool:
+        """Whether the operator configured the bridge (see ``BridgeClient.configured``)."""
+        return self._sync_client.configured
+
     async def download(self, request: BridgeDownloadRequest) -> BridgeDownloadResult:
         return await asyncio.to_thread(self._sync_client.download, request)
 
