@@ -1,16 +1,27 @@
 """Tests for search improvements: normalization, variant generation, fallback cascade."""
 
-import pytest
-from unittest.mock import MagicMock, patch
-from conftest import DummyContext, FakeZotero
+import sys
+import types
+from unittest.mock import MagicMock
+
+from conftest import DummyContext
 
 from zotero_mcp import utils as _utils
 from zotero_mcp.tools import search as search_module
 
 
+def _install_fake_semantic_search(monkeypatch, create_semantic_search):
+    # search_items imports zotero_mcp.semantic_search lazily; a stub module
+    # stands in for it so the cascade does not need chromadb installed.
+    module = types.ModuleType("zotero_mcp.semantic_search")
+    module.create_semantic_search = create_semantic_search
+    monkeypatch.setitem(sys.modules, "zotero_mcp.semantic_search", module)
+
+
 # ---------------------------------------------------------------------------
 # TestNormalization
 # ---------------------------------------------------------------------------
+
 
 class TestNormalization:
     """Test _normalize_for_search utility."""
@@ -42,6 +53,7 @@ class TestNormalization:
 # ---------------------------------------------------------------------------
 # TestVariantGeneration
 # ---------------------------------------------------------------------------
+
 
 class TestVariantGeneration:
     """Test _generate_search_variants utility."""
@@ -81,6 +93,7 @@ class TestVariantGeneration:
 # TestSearchWithVariants
 # ---------------------------------------------------------------------------
 
+
 class TestSearchWithVariants:
     """Test _search_with_variants helper."""
 
@@ -104,9 +117,7 @@ class TestSearchWithVariants:
         items = [{"key": "A1", "data": {"title": "Paper A"}}]
         zot = self._make_zot({"Brewer 2011": items})
 
-        result = search_module._search_with_variants(
-            zot, "Brewer 2011", "titleCreatorYear", 10
-        )
+        result = search_module._search_with_variants(zot, "Brewer 2011", "titleCreatorYear", 10)
         assert len(result) == 1
         assert result[0]["key"] == "A1"
 
@@ -115,23 +126,21 @@ class TestSearchWithVariants:
         items = [{"key": "B1", "data": {"title": "Paper B"}}]
         zot = self._make_zot({"Muller": items})
 
-        result = search_module._search_with_variants(
-            zot, "Müller", "titleCreatorYear", 10
-        )
+        result = search_module._search_with_variants(zot, "Müller", "titleCreatorYear", 10)
         assert len(result) == 1
         assert result[0]["key"] == "B1"
 
     def test_deduplicates_across_variants(self):
         # Same item found via both original and variant
         item = {"key": "C1", "data": {"title": "Paper C"}}
-        zot = self._make_zot({
-            "Cladder-Micus": [item],
-            "Cladder Micus": [item],
-        })
-
-        result = search_module._search_with_variants(
-            zot, "Cladder-Micus", "titleCreatorYear", 10
+        zot = self._make_zot(
+            {
+                "Cladder-Micus": [item],
+                "Cladder Micus": [item],
+            }
         )
+
+        result = search_module._search_with_variants(zot, "Cladder-Micus", "titleCreatorYear", 10)
         assert len(result) == 1  # deduplicated
 
     def test_forwards_item_type_and_tag(self):
@@ -144,10 +153,7 @@ class TestSearchWithVariants:
         zot.add_parameters = capture
         zot.items = MagicMock(return_value=[])
 
-        search_module._search_with_variants(
-            zot, "test", "titleCreatorYear", 10,
-            item_type="-note", tag=["research"]
-        )
+        search_module._search_with_variants(zot, "test", "titleCreatorYear", 10, item_type="-note", tag=["research"])
 
         assert captured["itemType"] == "-note"
         assert captured["tag"] == ["research"]
@@ -156,6 +162,7 @@ class TestSearchWithVariants:
 # ---------------------------------------------------------------------------
 # TestFallbackCascade
 # ---------------------------------------------------------------------------
+
 
 class TestFallbackCascade:
     """Test the fallback cascade in search_items."""
@@ -174,15 +181,17 @@ class TestFallbackCascade:
 
         fake_zot.add_parameters = fake_add_params
         fake_zot.items = fake_items
-        monkeypatch.setattr(_utils, "_generate_search_variants",
-                            lambda q: [q])  # No variant expansion for these tests
-        monkeypatch.setattr(search_module._client, "get_zotero_client",
-                            lambda: fake_zot)
+        monkeypatch.setattr(_utils, "_generate_search_variants", lambda q: [q])  # No variant expansion for these tests
+        monkeypatch.setattr(search_module._client, "get_zotero_client", lambda: fake_zot)
         return fake_zot
 
     def test_finds_on_first_try_no_fallback(self, monkeypatch):
-        items = [{"key": "X1", "data": {"title": "Found", "itemType": "journalArticle",
-                                         "creators": [], "date": "2020", "tags": []}}]
+        items = [
+            {
+                "key": "X1",
+                "data": {"title": "Found", "itemType": "journalArticle", "creators": [], "date": "2020", "tags": []},
+            }
+        ]
         self._setup(monkeypatch, {"Brewer 2011": items})
 
         ctx = DummyContext()
@@ -192,23 +201,41 @@ class TestFallbackCascade:
         assert "Note:" not in result  # no fallback note
 
     def test_finds_via_simplified_query(self, monkeypatch):
-        items = [{"key": "X2", "data": {"title": "Simplified Find", "itemType": "journalArticle",
-                                         "creators": [], "date": "2020", "tags": []}}]
+        items = [
+            {
+                "key": "X2",
+                "data": {
+                    "title": "Simplified Find",
+                    "itemType": "journalArticle",
+                    "creators": [],
+                    "date": "2020",
+                    "tags": [],
+                },
+            }
+        ]
         # "Brewer 2011 DMN default mode network" → Strategy 1 extracts author+year = "Brewer 2011"
         # Mock "Brewer 2011" so Strategy 1 finds it directly
         self._setup(monkeypatch, {"Brewer 2011": items})
 
         ctx = DummyContext()
-        result = search_module.search_items(
-            query="Brewer 2011 DMN default mode network", ctx=ctx
-        )
+        result = search_module.search_items(query="Brewer 2011 DMN default mode network", ctx=ctx)
 
         assert "Simplified Find" in result
         assert "Note:" in result  # fallback note present
 
     def test_finds_via_author_only(self, monkeypatch):
-        items = [{"key": "X3", "data": {"title": "Author Find", "itemType": "journalArticle",
-                                         "creators": [], "date": "2020", "tags": []}}]
+        items = [
+            {
+                "key": "X3",
+                "data": {
+                    "title": "Author Find",
+                    "itemType": "journalArticle",
+                    "creators": [],
+                    "date": "2020",
+                    "tags": [],
+                },
+            }
+        ]
         self._setup(monkeypatch, {"Brewer": items})
 
         ctx = DummyContext()
@@ -220,18 +247,27 @@ class TestFallbackCascade:
     def test_returns_not_found_when_all_fail(self, monkeypatch, tmp_path):
         self._setup(monkeypatch, {})  # Nothing found for any query
         # Point config path to a nonexistent location so semantic search is skipped
-        monkeypatch.setattr(search_module, "Path", lambda *a: tmp_path / "nonexistent")
+        monkeypatch.setenv("ZOTERO_MCP_CONFIG_PATH", str(tmp_path / "nonexistent" / "config.json"))
+        fake_create = MagicMock()
+        _install_fake_semantic_search(monkeypatch, fake_create)
 
         ctx = DummyContext()
         result = search_module.search_items(query="Nonexistent 9999", ctx=ctx)
 
         assert "No items found" in result
+        fake_create.assert_not_called()
 
     def test_fallback_note_includes_verification_guidance(self, monkeypatch):
-        items = [{"key": "X4", "data": {"title": "Paper A", "itemType": "journalArticle",
-                                         "creators": [], "date": "2020", "tags": []}},
-                 {"key": "X5", "data": {"title": "Paper B", "itemType": "journalArticle",
-                                         "creators": [], "date": "2021", "tags": []}}]
+        items = [
+            {
+                "key": "X4",
+                "data": {"title": "Paper A", "itemType": "journalArticle", "creators": [], "date": "2020", "tags": []},
+            },
+            {
+                "key": "X5",
+                "data": {"title": "Paper B", "itemType": "journalArticle", "creators": [], "date": "2021", "tags": []},
+            },
+        ]
         self._setup(monkeypatch, {"Brewer": items})
 
         ctx = DummyContext()
@@ -245,16 +281,23 @@ class TestFallbackCascade:
 # TestAdvancedSearchNormalization
 # ---------------------------------------------------------------------------
 
+
 class TestAdvancedSearchNormalization:
     """Test that _compare in advanced_search normalizes both sides."""
 
     def test_umlaut_matches_ascii(self, monkeypatch):
         """Müller should match Muller in advanced search conditions."""
-        item = {"key": "Z1", "version": 1, "data": {
-            "itemType": "journalArticle", "title": "Test Paper",
-            "creators": [{"lastName": "Müller", "firstName": "Hans", "creatorType": "author"}],
-            "date": "2020", "tags": [],
-        }}
+        item = {
+            "key": "Z1",
+            "version": 1,
+            "data": {
+                "itemType": "journalArticle",
+                "title": "Test Paper",
+                "creators": [{"lastName": "Müller", "firstName": "Hans", "creatorType": "author"}],
+                "date": "2020",
+                "tags": [],
+            },
+        }
 
         fake_zot = MagicMock()
         fake_zot.items = MagicMock(return_value=[item])
@@ -262,19 +305,24 @@ class TestAdvancedSearchNormalization:
 
         ctx = DummyContext()
         result = search_module.advanced_search(
-            conditions=[{"field": "creator", "operation": "contains", "value": "Muller"}],
-            ctx=ctx
+            conditions=[{"field": "creator", "operation": "contains", "value": "Muller"}], ctx=ctx
         )
 
         assert "Z1" in result or "Müller" in result or "Test Paper" in result
 
     def test_dash_matches_en_dash(self, monkeypatch):
         """Cladder-Micus (hyphen) should match Cladder–Micus (en-dash)."""
-        item = {"key": "Z2", "version": 1, "data": {
-            "itemType": "journalArticle", "title": "Test Paper",
-            "creators": [{"lastName": "Cladder\u2013Micus", "firstName": "C", "creatorType": "author"}],
-            "date": "2018", "tags": [],
-        }}
+        item = {
+            "key": "Z2",
+            "version": 1,
+            "data": {
+                "itemType": "journalArticle",
+                "title": "Test Paper",
+                "creators": [{"lastName": "Cladder\u2013Micus", "firstName": "C", "creatorType": "author"}],
+                "date": "2018",
+                "tags": [],
+            },
+        }
 
         fake_zot = MagicMock()
         fake_zot.items = MagicMock(return_value=[item])
@@ -282,8 +330,7 @@ class TestAdvancedSearchNormalization:
 
         ctx = DummyContext()
         result = search_module.advanced_search(
-            conditions=[{"field": "creator", "operation": "contains", "value": "Cladder-Micus"}],
-            ctx=ctx
+            conditions=[{"field": "creator", "operation": "contains", "value": "Cladder-Micus"}], ctx=ctx
         )
 
         assert "Z2" in result or "Test Paper" in result
@@ -293,6 +340,7 @@ class TestAdvancedSearchNormalization:
 # TestMultiWordSearch (from token optimization plan)
 # ---------------------------------------------------------------------------
 
+
 class TestMultiWordSearch:
     """Test multi-word collection search in search_collections."""
 
@@ -300,10 +348,12 @@ class TestMultiWordSearch:
         from zotero_mcp.tools import write as write_module
 
         fake_zot = MagicMock()
-        fake_zot.collections = MagicMock(return_value=[
-            {"key": "COL1", "data": {"name": "KCL - Mindfulness", "parentCollection": False}},
-            {"key": "COL2", "data": {"name": "Other Collection", "parentCollection": False}},
-        ])
+        fake_zot.collections = MagicMock(
+            return_value=[
+                {"key": "COL1", "data": {"name": "KCL - Mindfulness", "parentCollection": False}},
+                {"key": "COL2", "data": {"name": "Other Collection", "parentCollection": False}},
+            ]
+        )
         monkeypatch.setattr(write_module._client, "get_zotero_client", lambda: fake_zot)
 
         ctx = DummyContext()
@@ -316,10 +366,12 @@ class TestMultiWordSearch:
         from zotero_mcp.tools import write as write_module
 
         fake_zot = MagicMock()
-        fake_zot.collections = MagicMock(return_value=[
-            {"key": "COL1", "data": {"name": "Machine Learning", "parentCollection": False}},
-            {"key": "COL2", "data": {"name": "Deep Learning", "parentCollection": False}},
-        ])
+        fake_zot.collections = MagicMock(
+            return_value=[
+                {"key": "COL1", "data": {"name": "Machine Learning", "parentCollection": False}},
+                {"key": "COL2", "data": {"name": "Deep Learning", "parentCollection": False}},
+            ]
+        )
         monkeypatch.setattr(write_module._client, "get_zotero_client", lambda: fake_zot)
 
         ctx = DummyContext()
@@ -333,6 +385,7 @@ class TestMultiWordSearch:
 # TestCascadeSimplification (P2 fix)
 # ---------------------------------------------------------------------------
 
+
 class TestCascadeSimplification:
     """Tests for Strategy 1 author+year extraction."""
 
@@ -345,16 +398,27 @@ class TestCascadeSimplification:
         fake_zot.items = fake_items
         fake_zot.add_parameters = MagicMock()
 
-        def fake_search_with_variants(zot, query, qmode, limit, item_type="-attachment",
-                                       tag=None, cascade_start=None, cascade_timeout=None):
+        def fake_search_with_variants(
+            zot, query, qmode, limit, item_type="-attachment", tag=None, cascade_start=None, cascade_timeout=None
+        ):
             return items_by_query.get(query, [])
 
         monkeypatch.setattr(search_module, "_search_with_variants", fake_search_with_variants)
         monkeypatch.setattr(search_module._client, "get_zotero_client", lambda: fake_zot)
 
     def test_strategy1_uses_author_and_year(self, monkeypatch):
-        items = [{"key": "L1", "data": {"title": "Lynch Paper", "itemType": "journalArticle",
-                                         "creators": [], "date": "2003", "tags": []}}]
+        items = [
+            {
+                "key": "L1",
+                "data": {
+                    "title": "Lynch Paper",
+                    "itemType": "journalArticle",
+                    "creators": [],
+                    "date": "2003",
+                    "tags": [],
+                },
+            }
+        ]
         self._setup(monkeypatch, {"Lynch 2003": items})
         ctx = DummyContext()
         result = search_module.search_items(
@@ -363,19 +427,37 @@ class TestCascadeSimplification:
         assert "Lynch Paper" in result
 
     def test_strategy1_no_year_uses_author_only(self, monkeypatch):
-        items = [{"key": "L2", "data": {"title": "Lynch No Year", "itemType": "journalArticle",
-                                         "creators": [], "date": "2003", "tags": []}}]
+        items = [
+            {
+                "key": "L2",
+                "data": {
+                    "title": "Lynch No Year",
+                    "itemType": "journalArticle",
+                    "creators": [],
+                    "date": "2003",
+                    "tags": [],
+                },
+            }
+        ]
         self._setup(monkeypatch, {"Lynch": items})
         ctx = DummyContext()
-        result = search_module.search_items(
-            query="Lynch dialectical behavior therapy", ctx=ctx
-        )
+        result = search_module.search_items(query="Lynch dialectical behavior therapy", ctx=ctx)
         assert "Lynch No Year" in result
 
     def test_strategy1_two_words_skipped(self, monkeypatch):
         """With only 2 words, Strategy 1 (len > 2) is skipped."""
-        items = [{"key": "L3", "data": {"title": "Two Words", "itemType": "journalArticle",
-                                         "creators": [], "date": "2003", "tags": []}}]
+        items = [
+            {
+                "key": "L3",
+                "data": {
+                    "title": "Two Words",
+                    "itemType": "journalArticle",
+                    "creators": [],
+                    "date": "2003",
+                    "tags": [],
+                },
+            }
+        ]
         # Only Strategy 2 (author only) should fire for 2-word queries
         self._setup(monkeypatch, {"Lynch": items})
         ctx = DummyContext()
@@ -384,29 +466,46 @@ class TestCascadeSimplification:
 
     def test_strategy1_year_first_reordered(self, monkeypatch):
         """'2003 Lynch therapy' should produce 'Lynch 2003', not '2003 2003'."""
-        items = [{"key": "L4", "data": {"title": "Year First", "itemType": "journalArticle",
-                                         "creators": [], "date": "2003", "tags": []}}]
+        items = [
+            {
+                "key": "L4",
+                "data": {
+                    "title": "Year First",
+                    "itemType": "journalArticle",
+                    "creators": [],
+                    "date": "2003",
+                    "tags": [],
+                },
+            }
+        ]
         self._setup(monkeypatch, {"Lynch 2003": items})
         ctx = DummyContext()
-        result = search_module.search_items(
-            query="2003 Lynch therapy", ctx=ctx
-        )
+        result = search_module.search_items(query="2003 Lynch therapy", ctx=ctx)
         assert "Year First" in result
 
     def test_strategy1_multiple_years_picks_first(self, monkeypatch):
-        items = [{"key": "L5", "data": {"title": "Multi Year", "itemType": "journalArticle",
-                                         "creators": [], "date": "2003", "tags": []}}]
+        items = [
+            {
+                "key": "L5",
+                "data": {
+                    "title": "Multi Year",
+                    "itemType": "journalArticle",
+                    "creators": [],
+                    "date": "2003",
+                    "tags": [],
+                },
+            }
+        ]
         self._setup(monkeypatch, {"Lynch 2003": items})
         ctx = DummyContext()
-        result = search_module.search_items(
-            query="Lynch 2003 2005 therapy", ctx=ctx
-        )
+        result = search_module.search_items(query="Lynch 2003 2005 therapy", ctx=ctx)
         assert "Multi Year" in result
 
 
 # ---------------------------------------------------------------------------
 # TestVerificationGuidance (P1 + P3 fixes)
 # ---------------------------------------------------------------------------
+
 
 class TestVerificationGuidance:
     """Tests for fallback note content."""
@@ -416,16 +515,27 @@ class TestVerificationGuidance:
         fake_zot.items = MagicMock(return_value=[])
         fake_zot.add_parameters = MagicMock()
 
-        def fake_search_with_variants(zot, query, qmode, limit, item_type="-attachment",
-                                       tag=None, cascade_start=None, cascade_timeout=None):
+        def fake_search_with_variants(
+            zot, query, qmode, limit, item_type="-attachment", tag=None, cascade_start=None, cascade_timeout=None
+        ):
             return items_by_query.get(query, [])
 
         monkeypatch.setattr(search_module, "_search_with_variants", fake_search_with_variants)
         monkeypatch.setattr(search_module._client, "get_zotero_client", lambda: fake_zot)
 
     def test_fallback_note_includes_original_query(self, monkeypatch):
-        items = [{"key": "V1", "data": {"title": "Some Paper", "itemType": "journalArticle",
-                                         "creators": [], "date": "2020", "tags": []}}]
+        items = [
+            {
+                "key": "V1",
+                "data": {
+                    "title": "Some Paper",
+                    "itemType": "journalArticle",
+                    "creators": [],
+                    "date": "2020",
+                    "tags": [],
+                },
+            }
+        ]
         self._setup(monkeypatch, {"Brewer": items})
         ctx = DummyContext()
         result = search_module.search_items(query="Brewer 2011", ctx=ctx)
@@ -433,11 +543,22 @@ class TestVerificationGuidance:
 
     def test_semantic_fallback_has_stronger_warning(self, monkeypatch, tmp_path):
         """When semantic search is the fallback, note should say 'may NOT be the exact paper'."""
-        sem_items = [{"key": "S1", "data": {"title": "Semantic Hit", "itemType": "journalArticle",
-                                              "creators": [], "date": "2020", "tags": []}}]
+        sem_items = [
+            {
+                "key": "S1",
+                "data": {
+                    "title": "Semantic Hit",
+                    "itemType": "journalArticle",
+                    "creators": [],
+                    "date": "2020",
+                    "tags": [],
+                },
+            }
+        ]
 
-        def fake_search_with_variants(zot, query, qmode, limit, item_type="-attachment",
-                                       tag=None, cascade_start=None, cascade_timeout=None):
+        def fake_search_with_variants(
+            zot, query, qmode, limit, item_type="-attachment", tag=None, cascade_start=None, cascade_timeout=None
+        ):
             return []  # All text searches fail
 
         fake_zot = MagicMock()
@@ -448,30 +569,30 @@ class TestVerificationGuidance:
 
         # Mock semantic search
         fake_sem = MagicMock()
-        fake_sem.search.return_value = {
-            "results": [{"item_key": "S1", "zotero_item": sem_items[0]}]
-        }
+        fake_sem.search.return_value = {"results": [{"item_key": "S1", "zotero_item": sem_items[0]}]}
         fake_create = MagicMock(return_value=fake_sem)
 
         # Make config path exist
         config_dir = tmp_path / ".config" / "zotero-mcp"
         config_dir.mkdir(parents=True)
-        (config_dir / "config.json").write_text("{}")
-        monkeypatch.setattr(search_module.Path, "home", lambda: tmp_path)
+        config_path = config_dir / "config.json"
+        config_path.write_text("{}")
+        monkeypatch.setenv("ZOTERO_MCP_CONFIG_PATH", str(config_path))
 
-        monkeypatch.setattr(
-            "zotero_mcp.semantic_search.create_semantic_search", fake_create
-        )
+        _install_fake_semantic_search(monkeypatch, fake_create)
 
         ctx = DummyContext()
         result = search_module.search_items(query="Nonexistent Paper 2099", ctx=ctx)
 
+        fake_create.assert_called_once_with(str(config_path.resolve()))
+        assert "Semantic Hit" in result
         assert "may NOT be" in result or "semantic" in result.lower()
 
 
 # ---------------------------------------------------------------------------
 # TestCascadeTimeout (P5 fix)
 # ---------------------------------------------------------------------------
+
 
 class TestCascadeTimeout:
     """Test that cascade respects the timeout budget."""
@@ -484,17 +605,16 @@ class TestCascadeTimeout:
         fake_zot.items = MagicMock(return_value=[])
         fake_zot.add_parameters = MagicMock()
 
-        def fake_search_with_variants(zot, query, qmode, limit, item_type="-attachment",
-                                       tag=None, cascade_start=None, cascade_timeout=None):
+        def fake_search_with_variants(
+            zot, query, qmode, limit, item_type="-attachment", tag=None, cascade_start=None, cascade_timeout=None
+        ):
             return []  # Nothing found
 
         monkeypatch.setattr(search_module, "_search_with_variants", fake_search_with_variants)
         monkeypatch.setattr(search_module._client, "get_zotero_client", lambda: fake_zot)
 
         ctx = DummyContext()
-        result = search_module.search_items(
-            query="Lynch 2003 dialectical behavior therapy", ctx=ctx
-        )
+        result = search_module.search_items(query="Lynch 2003 dialectical behavior therapy", ctx=ctx)
 
         # Should return "no items found" without trying all strategies
         assert "No items found" in result
