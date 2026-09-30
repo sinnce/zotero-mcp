@@ -315,8 +315,13 @@ async def test_unconfigured_bridge_uses_documented_direct_download_channel(monke
 
     assert result["status"] == "complete"
     assert result["message"] == "Downloaded via HTTP"
+    assert result["file_path"] == str(tmp_path / "direct.pdf")
     assert "bridge_session" not in result["provenance"]
     downloader_class.assert_called_once()
+    # The direct channel must actually fetch the resolved location, not just
+    # be constructed.
+    downloader.download.assert_awaited_once()
+    assert downloader.download.await_args.args == ("https://publisher.example/paper.pdf",)
     get.assert_not_called()
     post.assert_not_called()
 

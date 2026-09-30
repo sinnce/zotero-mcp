@@ -177,7 +177,7 @@ The ownership split is:
 - `zotero-mcp`: resolve access and decide whether a session-backed location should be used
 - `opencode-deep-research`: keep the named browser session alive and perform the download
 
-Bridge auth is now fail-closed. `GET /bridge/health` carries bearer auth only. `POST /bridge/download` carries bearer auth plus the required derived allowed-domain list. If `BRIDGE_AUTH_TOKEN` is missing on the caller side, `zotero-mcp` skips bridge calls and stays on the standard direct-download path.
+Bridge auth is now fail-closed. `GET /bridge/health` carries bearer auth only. `POST /bridge/download` carries bearer auth plus the required derived allowed-domain list. If the caller has no bridge configuration at all (none of `ZOTERO_BRIDGE_TOKEN`, `BRIDGE_AUTH_TOKEN`, `BRIDGE_TOKEN` or `BRIDGE_SERVER_URL` set), `zotero-mcp` skips bridge calls and stays on the standard direct-download path. Once any of those is set, a missing, empty or malformed token fails with `BRIDGE_AUTH_INVALID` and acquisition stops without falling back to direct HTTP.
 
 ## 🧠 Semantic Search
 
