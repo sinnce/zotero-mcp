@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from zotero_mcp.acquisition.async_bridge_client import AsyncBridgeClient
 from zotero_mcp.acquisition.bridge_client import (
     ARTIFACT_HASH_MISMATCH,
     ARTIFACT_MISSING,
@@ -355,7 +356,8 @@ async def _acquire(resolution, config, bridge_result, auto_ingest=True, ingest_s
             side_effect=ingest_side_effect,
         ) as ingest,
     ):
-        bridge = MagicMock()
+        bridge = MagicMock(spec_set=AsyncBridgeClient)
+        bridge.configured = True
         bridge.health = AsyncMock(return_value=READY_HEALTH)
         bridge.download = AsyncMock(return_value=bridge_result)
         bridge_class.return_value = bridge

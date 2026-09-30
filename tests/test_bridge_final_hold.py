@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
+from zotero_mcp.acquisition.async_bridge_client import AsyncBridgeClient
 from zotero_mcp.acquisition.bridge_client import (
     BRIDGE_AUTH_INVALID,
     BRIDGE_CONTRACT_VERSION,
@@ -140,6 +141,16 @@ def _resolution(metadata=None) -> AccessResolution:
     )
 
 
+def _configured_bridge(health, download_result, configured=True):
+    # spec_set keeps the double to the AsyncBridgeClient surface; configured is
+    # set explicitly because acquire_paper branches on it.
+    bridge = MagicMock(spec_set=AsyncBridgeClient)
+    bridge.configured = configured
+    bridge.health = AsyncMock(return_value=health)
+    bridge.download = AsyncMock(return_value=download_result)
+    return bridge
+
+
 async def _acquire_with_ingest(bridge_result, ingest_side_effect):
     zot = MagicMock()
     with (
@@ -150,10 +161,7 @@ async def _acquire_with_ingest(bridge_result, ingest_side_effect):
         patch("zotero_mcp.tools.acquire_paper._get_write_client", return_value=(zot, zot)),
         patch("zotero_mcp.tools.acquire_paper.ingest_paper", side_effect=ingest_side_effect) as ingest,
     ):
-        bridge = MagicMock()
-        bridge.health = AsyncMock(return_value=READY_HEALTH)
-        bridge.download = AsyncMock(return_value=bridge_result)
-        bridge_class.return_value = bridge
+        bridge_class.return_value = _configured_bridge(READY_HEALTH, bridge_result)
         result = await acquire_paper("10.1000/example", session_name="campus", auto_ingest=True)
     return result, ingest, downloader_class
 
@@ -360,10 +368,8 @@ async def test_configured_bridge_with_invalid_auth_is_terminal_without_fallback(
 
 @pytest.mark.asyncio
 async def test_invalid_auth_on_download_is_terminal_without_fallback():
-    invalid = MagicMock()
-    invalid.health = AsyncMock(return_value=READY_HEALTH)
-    invalid.download = AsyncMock(
-        return_value=MagicMock(status="failed", error_code=BRIDGE_AUTH_INVALID, file_path=None)
+    invalid = _configured_bridge(
+        READY_HEALTH, MagicMock(status="failed", error_code=BRIDGE_AUTH_INVALID, file_path=None)
     )
     with (
         patch("zotero_mcp.tools.acquire_paper.load_acquisition_config", return_value=AcquisitionConfig()),
@@ -377,3 +383,24 @@ async def test_invalid_auth_on_download_is_terminal_without_fallback():
     assert result["error_code"] == BRIDGE_AUTH_INVALID
     invalid.download.assert_awaited_once()
     downloader_class.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_same_bridge_double_unconfigured_is_never_used(tmp_path):
+    # The configured doubles above only prove the bridge route because this
+    # one, identical except configured=False, never reaches the bridge.
+    unconfigured = _configured_bridge(READY_HEALTH, MagicMock(status="complete"), configured=False)
+    downloader = _direct_downloader(tmp_path)
+    with (
+        patch("zotero_mcp.tools.acquire_paper.load_acquisition_config", return_value=AcquisitionConfig()),
+        patch("zotero_mcp.tools.acquire_paper.resolve_access", new=AsyncMock(return_value=_resolution({}))),
+        patch("zotero_mcp.tools.acquire_paper.BridgeClient", return_value=unconfigured),
+        patch("zotero_mcp.tools.acquire_paper.ArtifactDownloader", return_value=downloader),
+    ):
+        result = await acquire_paper("10.1000/example", session_name="campus")
+
+    assert result["status"] == "complete"
+    assert result["message"] == "Downloaded via HTTP"
+    unconfigured.health.assert_not_awaited()
+    unconfigured.download.assert_not_awaited()
+    downloader.download.assert_awaited_once()
