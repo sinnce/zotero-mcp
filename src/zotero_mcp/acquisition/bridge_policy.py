@@ -13,6 +13,10 @@ code the server would return without sending it:
 3. ``validateBridgeDestination`` in ``bridge-v2-policy.ts`` (``INVALID_REQUEST``,
    ``URL_SCHEME_BLOCKED``, ``DOMAIN_BLOCKED``).
 
+The body-level checks that come first (declared length, UTF-8 decode,
+``JSON.parse``), the ``request_id`` the server echoes in each error envelope,
+and ``validateBridgeToken`` are mirrored as well.
+
 URLs are parsed with a WHATWG URL parser subset, because the server uses
 ``new URL()``; Python's ``urllib.parse`` disagrees with it on many inputs.
 A domain that is not ASCII after percent-decoding, or that has an ``xn--``
@@ -44,6 +48,7 @@ _ZOD_UUID = re.compile(
     r"00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)"
 )
 _SESSION_NAME = re.compile(r"[a-z0-9][a-z0-9._-]{0,127}")
+_BRIDGE_TOKEN = re.compile(r"[A-Za-z0-9_-]{32,256}")
 _DOMAIN_LABEL = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?")
 # Node/Bun net.isIPv4: dotted quad without leading zeros.
 _NODE_IPV4 = re.compile(
@@ -483,14 +488,27 @@ def is_json_int(value: object, minimum: int, maximum: int) -> bool:
     return minimum <= value <= maximum
 
 
-def _encoded_size(payload: dict) -> int | None:
-    # The same encoding httpx applies to json=; a payload it cannot encode
-    # (None) can never reach the server.
+def _wire_body(payload: dict) -> tuple[int | None, bool]:
+    """``(byte length, sendable)`` of the body httpx builds for ``json=payload``.
+
+    httpx encodes with ``ensure_ascii=False`` and ``allow_nan=False``. When it
+    cannot (a lone surrogate, NaN or an infinity), the bytes it would have
+    written are a lone-surrogate UTF-8 sequence or a ``NaN``/``Infinity``
+    literal, which the server's fatal UTF-8 decode or ``JSON.parse`` refuses
+    with ``INVALID_JSON``. The length of those bytes is still measured, since
+    the server checks the declared length first. A value JSON has no form for
+    at all (length ``None``) has no body.
+    """
     try:
-        body = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
+        text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+        return len(text.encode("utf-8")), True
     except (TypeError, ValueError, UnicodeEncodeError):
-        return None
-    return len(body)
+        pass
+    try:
+        text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), allow_nan=True)
+        return len(text.encode("utf-8", "surrogatepass")), False
+    except (TypeError, ValueError, UnicodeEncodeError, RecursionError):
+        return None, False
 
 
 def _matches_request_schema(payload: dict) -> bool:
@@ -557,15 +575,17 @@ def request_error(payload: dict) -> str | None:
 
     ``None`` means the payload passes every check the client can evaluate;
     the session registry, DNS and readiness checks that follow stay on the
-    server. A payload that cannot be JSON-encoded is ``INVALID_REQUEST``.
+    server. A payload httpx cannot encode is never sent; it gets the code the
+    server returns for the bytes it would have been (see ``_wire_body``).
     """
-    size = _encoded_size(payload)
-    if size is None:
-        return "INVALID_REQUEST"
+    size, sendable = _wire_body(payload)
     # The declared Content-Length check and bounded body read in
-    # bridge-server.ts run before JSON.parse and every payload check.
-    if size > MAX_BODY_BYTES:
+    # bridge-server.ts run before the UTF-8 decode, JSON.parse and every
+    # payload check.
+    if size is not None and size > MAX_BODY_BYTES:
         return "REQUEST_TOO_LARGE"
+    if not sendable:
+        return "INVALID_JSON"
     # classifyVersion in bridge-server.ts. The client always sends the key,
     # so the versionless-legacy branch cannot apply.
     version = payload.get("contract_version")
@@ -576,6 +596,34 @@ def request_error(payload: dict) -> str | None:
     if not _matches_request_schema(payload):
         return "INVALID_REQUEST"
     return destination_error(payload["doi"], payload["candidate_url"], payload["allowed_domains"])
+
+
+def refusal_request_id(payload: dict, error_code: str) -> str | None:
+    """The ``request_id`` of the server's error envelope for a refused ``payload``.
+
+    ``createBridgeRequestHandler`` answers body-level failures (size, UTF-8,
+    ``JSON.parse``) with ``null``. Once the body parses, it echoes
+    ``request_id`` whenever that field alone is a zod uuid, for version and
+    schema errors as well as destination errors.
+    """
+    if error_code in ("REQUEST_TOO_LARGE", "INVALID_JSON"):
+        return None
+    request_id = payload.get("request_id")
+    return request_id if isinstance(request_id, str) and is_zod_uuid(request_id) else None
+
+
+def validate_bridge_token(raw: object) -> str | None:
+    """``validateBridgeToken`` in ``bridge-server.ts``: the token, or ``None``.
+
+    A CR or LF anywhere is refused, then surrounding ECMAScript whitespace is
+    trimmed and the rest must be 32-256 characters of ``[A-Za-z0-9_-]``. The
+    server normalizes its own configured token this way and then compares the
+    bearer header exactly, so the client sends the trimmed token.
+    """
+    if not isinstance(raw, str) or "\r" in raw or "\n" in raw:
+        return None
+    token = raw.strip(_JS_TRIM_CHARS)
+    return token if _BRIDGE_TOKEN.fullmatch(token) else None
 
 
 def is_valid_final_url(value: object) -> bool:

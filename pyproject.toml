@@ -78,10 +78,11 @@ path = "src/zotero_mcp/_version.py"
 packages = ["src/zotero_mcp"]
 
 [tool.pytest.ini_options]
-addopts = "-m 'not integration'"
+addopts = "-m 'not integration and not bridge_server'"
 asyncio_mode = "auto"
 markers = [
     "integration: requires live Zotero and network access",
+    "bridge_server: runs the real bridge server under Bun; needs ZOTERO_BRIDGE_SERVER_REPO",
 ]
 
 [tool.ruff]

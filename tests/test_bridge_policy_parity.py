@@ -10,6 +10,7 @@ The ``server`` column was checked against the server code itself
 """
 
 import json
+import re
 from unittest.mock import Mock, patch
 
 import httpx
@@ -26,6 +27,11 @@ TOKEN = "ParityToken_0123456789abcdefghijklmnopqrstuvwxyz"
 REQUEST_ID = "11111111-1111-4111-8111-111111111111"
 ACCEPT = "ACCEPT"
 REJECT = "REJECT"
+# zod 4 z.string().uuid(), as in bridge-v2-contract.ts:8.
+_ZOD_UUID_RE = re.compile(
+    r"(?:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|"
+    r"00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)"
+)
 LONG_HOST = "a" * 63 + "." + "b" * 63 + "." + "c" * 63 + "." + "d" * 61
 
 
@@ -327,7 +333,15 @@ def test_request_policy_matches_server(payload, server_code):
         post.assert_not_called()
         assert result.status == "failed"
         assert result.error_code == server_code
-        assert result.request_id is None
+        # The envelope the server returns for a refusal after the body parses
+        # echoes a valid request_id (bridge-server.ts:172-193); the whole
+        # envelope is checked against the executed server in
+        # test_bridge_server_oracle.py.
+        expected_id = None if server_code == "REQUEST_TOO_LARGE" else payload["request_id"]
+        if not (isinstance(expected_id, str) and _ZOD_UUID_RE.fullmatch(expected_id)):
+            expected_id = None
+        assert result.request_id == expected_id
+        assert result.contract_version == "2.0.0"
 
 
 def test_size_rows_sit_on_the_server_limit():

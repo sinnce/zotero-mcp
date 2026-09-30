@@ -66,7 +66,9 @@ def _ready_health() -> dict:
 INVALID_FIELDS = [
     pytest.param({"doi": ""}, "INVALID_REQUEST", id="doi-empty"),
     pytest.param({"doi": "1" * 513}, "INVALID_REQUEST", id="doi-over-512-code-points"),
-    pytest.param({"doi": "10.1000/\ud800"}, "INVALID_REQUEST", id="doi-lone-surrogate"),
+    # httpx cannot encode a lone surrogate; the UTF-8 bytes it would write
+    # fail the server's fatal decode (bridge-server.ts:390).
+    pytest.param({"doi": "10.1000/\ud800"}, "INVALID_JSON", id="doi-lone-surrogate"),
     pytest.param({"doi": None}, "INVALID_REQUEST", id="doi-none"),
     pytest.param({"doi": 101000}, "INVALID_REQUEST", id="doi-not-string"),
     pytest.param({"session_name": ""}, "INVALID_REQUEST", id="session-empty"),
@@ -151,7 +153,11 @@ def test_invalid_request_fields_fail_closed_before_transport(overrides, error_co
     assert result.status == "failed"
     assert result.auth_state == "unchecked"
     assert result.error_code == error_code
-    assert result.request_id is None
+    assert result.contract_version == BRIDGE_CONTRACT_VERSION
+    # Once the body parses, the server echoes a valid request_id
+    # (bridge-server.ts:172-193); every request_id override here is invalid.
+    echoed = error_code != "INVALID_JSON" and "request_id" not in overrides
+    assert result.request_id == (REQUEST_ID if echoed else None)
     post.assert_not_called()
 
 

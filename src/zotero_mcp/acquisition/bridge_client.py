@@ -435,10 +435,11 @@ class BridgeClient:
         )
 
     def _headers(self) -> dict[str, str] | None:
-        if not re.fullmatch(r"[A-Za-z0-9_-]{32,256}", self._auth_token):
+        token = bridge_policy.validate_bridge_token(self._auth_token)
+        if token is None:
             return None
         return {
-            "Authorization": f"Bearer {self._auth_token}",
+            "Authorization": f"Bearer {token}",
             "Accept": "application/json",
             "Content-Type": "application/json; charset=utf-8",
         }
@@ -484,15 +485,18 @@ class BridgeClient:
             message="Bridge returned an invalid download response",
         )
 
-    def _refused_request_result(self, error_code: str) -> BridgeDownloadResult:
-        # The code, status, auth state and message the server would return
-        # for this payload; request_id stays None because nothing was sent.
+    def _refused_request_result(self, error_code: str, request_id: str | None) -> BridgeDownloadResult:
+        # The error envelope the server would return for this payload: its
+        # code, status, auth state, message, contract version and request_id
+        # (see bridge_policy.refusal_request_id). Nothing was sent.
         status, auth_state = _ERROR_STATUS.get(error_code, ("failed", "unchecked"))
         return BridgeDownloadResult(
             status=status,  # type: ignore[arg-type]
             auth_state=auth_state,  # type: ignore[arg-type]
             error_code=error_code,
             message=_ERROR_DETAILS[error_code][1],
+            contract_version=BRIDGE_CONTRACT_VERSION,
+            request_id=request_id,
         )
 
     def _timeout_result(self) -> BridgeDownloadResult:
@@ -639,10 +643,10 @@ class BridgeClient:
         # would refuse before browser work (version, schema, destination).
         refused = bridge_policy.request_error(payload)
         if refused is not None:
-            return self._refused_request_result(refused)
+            return self._refused_request_result(refused, bridge_policy.refusal_request_id(payload, refused))
         request_id = request.request_id
         if not isinstance(request_id, str):  # unreachable: the schema requires a UUID string
-            return self._refused_request_result("INVALID_REQUEST")
+            return self._refused_request_result("INVALID_REQUEST", None)
         # normalizeAllowedDomains lowercases every entry; the same list is
         # sent and used to check the returned final_url.
         sent_domains = [domain.lower() for domain in payload["allowed_domains"]]
@@ -656,9 +660,9 @@ class BridgeClient:
             )
         except _URL_ERRORS:
             return self._url_invalid_result()
-        except httpx.TimeoutException:
+        except (httpx.TimeoutException, TimeoutError):
             return self._timeout_result()
-        except httpx.HTTPError:
+        except Exception:  # httpx.HTTPError or any other transport failure
             return self._unreachable_result()
         return self._parse_download_response(response, request_id, sent_domains) or self._response_invalid_result()
 
@@ -686,7 +690,7 @@ class BridgeClient:
             response = httpx.get(f"{self.base_url}/bridge/health/ready", headers=headers, timeout=2.0)
         except _URL_ERRORS:
             return self._url_invalid_health()
-        except httpx.HTTPError as exc:
+        except Exception as exc:  # httpx.HTTPError or any other transport failure
             return BridgeHealthResult(
                 False,
                 self.base_url,
