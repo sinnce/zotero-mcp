@@ -202,22 +202,22 @@ Institutional access is decided by `zotero-mcp`, but browser automation is deleg
 
 #### Operator setup for authenticated bridge calls
 
-The bridge now expects authenticated caller requests. Set `BRIDGE_AUTH_TOKEN` on both the `zotero-mcp` side and the bridge-server side, and keep the value private.
+The bridge now expects authenticated caller requests. The bridge server reads its token from `BRIDGE_TOKEN`; `zotero-mcp` reads `ZOTERO_BRIDGE_TOKEN`, then `BRIDGE_AUTH_TOKEN`, then `BRIDGE_TOKEN`. Set the same value on both sides and keep it private.
 
 What to keep in mind:
 
-- `BRIDGE_AUTH_TOKEN` must be the same on both sides and should be at least 32 characters long.
+- The token must be the same on both sides. The token must be 32-256 characters of `A-Z`, `a-z`, `0-9`, `_` and `-`. Like the server's `validateBridgeToken`, the caller strips surrounding whitespace (spaces, tabs, no-break and other Unicode spaces, BOM) before checking; a CR or LF anywhere, whitespace inside the token, or any other character makes it malformed.
 - Store it in a private env file, secret manager, or service definition, not in committed config or shared screenshots.
 - With no caller bridge configuration at all (none of `ZOTERO_BRIDGE_TOKEN`, `BRIDGE_AUTH_TOKEN`, `BRIDGE_TOKEN` or `BRIDGE_SERVER_URL` set), bridge calls are skipped and `acquire_paper` uses the normal direct-download path. This is the only case in which direct download is used.
-- Once any of those is set, the bridge is the only acquisition channel and `session_name` is required. An empty, missing or malformed token fails with `BRIDGE_AUTH_INVALID` and a malformed `BRIDGE_SERVER_URL` with `BRIDGE_URL_INVALID` before any bridge request; an unreachable bridge fails with `BRIDGE_UNREACHABLE`, a bridge that is not ready with `CAPABILITY_UNAVAILABLE`, and an invalid readiness response with `BRIDGE_HEALTH_INVALID`. Acquisition stops on each of these and never switches to direct download.
+- Once any of those is set, the bridge is the only acquisition channel and `session_name` is required. An empty, missing or malformed token fails with `BRIDGE_AUTH_INVALID` and a malformed `BRIDGE_SERVER_URL` with `BRIDGE_URL_INVALID` before any bridge request; an unreachable bridge (any transport failure) fails with `BRIDGE_UNREACHABLE`, a bridge that is not ready with `CAPABILITY_UNAVAILABLE`, and an invalid readiness response with `BRIDGE_HEALTH_INVALID`. Acquisition stops on each of these and never switches to direct download.
 - `BRIDGE_ALLOWED_DOMAINS` is optional and should contain only operator-approved extra hostnames that are not already derived from the candidate URL or nested redirect targets.
 
 #### Rollout order
 
 Setting any bridge variable on the caller makes the bridge the only acquisition channel, so bring the bridge server up first.
 
-1. Set `BRIDGE_AUTH_TOKEN` on the bridge server, start it, and authenticate the named browser session.
-2. Set the same `BRIDGE_AUTH_TOKEN` where `zotero-mcp` runs. Add `BRIDGE_ALLOWED_DOMAINS` only when you need extra approved hosts.
+1. Set `BRIDGE_TOKEN` on the bridge server, start it, and authenticate the named browser session.
+2. Set the same value as `ZOTERO_BRIDGE_TOKEN` (or `BRIDGE_AUTH_TOKEN`) where `zotero-mcp` runs. Add `BRIDGE_ALLOWED_DOMAINS` only when you need extra approved hosts.
 3. Pass `session_name` on every `acquire_paper` call from then on.
 
 To return to direct HTTP downloads, unset every bridge variable on the caller side.
