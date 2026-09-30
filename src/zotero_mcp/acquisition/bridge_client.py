@@ -32,6 +32,9 @@ _ARTIFACT_READ_CHUNK = 1024 * 1024
 ARTIFACT_UNVERIFIABLE = "ARTIFACT_UNVERIFIABLE"
 ARTIFACT_MISSING = "ARTIFACT_MISSING"
 ARTIFACT_NOT_REGULAR = "ARTIFACT_NOT_REGULAR"
+# The staged path named a different regular file when it was opened than when
+# it was inspected: the bridge-owned entry was replaced in between.
+ARTIFACT_REPLACED = "ARTIFACT_REPLACED"
 ARTIFACT_UNREADABLE = "ARTIFACT_UNREADABLE"
 ARTIFACT_SIZE_MISMATCH = "ARTIFACT_SIZE_MISMATCH"
 ARTIFACT_HASH_MISMATCH = "ARTIFACT_HASH_MISMATCH"
@@ -213,9 +216,13 @@ def _allowed_domains(
     # An explicit request allowlist is authoritative. The derived candidate
     # hosts are only a compatibility default for callers that do not provide
     # one; the bridge server remains the final policy authority.
-    domains = [] if requested_domains is not None else _candidate_domains(candidate_url)
-    values = requested_domains if requested_domains is not None else extra_domains.split(",")
-    for value in values:
+    if requested_domains is not None:
+        # _is_valid_requested_domains checks the whole list before this point;
+        # an explicit list is never filtered or truncated into another one.
+        explicit = [_normalize_domain(value) for value in requested_domains]
+        return [domain for domain in explicit if domain] if None not in explicit else []
+    domains = _candidate_domains(candidate_url)
+    for value in extra_domains.split(","):
         domain = _normalize_domain(value)
         if domain and domain not in domains:
             domains.append(domain)
@@ -290,8 +297,28 @@ def _is_valid_timeout_ms(value: object) -> bool:
     return not isinstance(value, bool) and isinstance(value, int) and _MIN_TIMEOUT_MS <= value <= _MAX_TIMEOUT_MS
 
 
+def _is_valid_wire_domain(value: str) -> bool:
+    return 1 <= len(value) <= _MAX_DOMAIN_LENGTH and re.fullmatch(r"[\x21-\x7e]+", value) is not None
+
+
 def _is_valid_requested_domains(value: object) -> bool:
-    return value is None or (isinstance(value, (list, tuple)) and all(isinstance(domain, str) for domain in value))
+    # The schema needs 1-32 printable entries of 1-253 characters; the server
+    # policy then rejects any entry that is not a hostname and any
+    # case-insensitive duplicate. Refuse the whole list instead of sending a
+    # filtered or truncated one.
+    if value is None:
+        return True
+    if not isinstance(value, (list, tuple)) or not 1 <= len(value) <= _MAX_ALLOWED_DOMAINS:
+        return False
+    seen: set[str] = set()
+    for domain in value:
+        if not isinstance(domain, str) or not _is_valid_wire_domain(domain):
+            return False
+        normalized = _normalize_domain(domain)
+        if normalized is None or normalized in seen:
+            return False
+        seen.add(normalized)
+    return True
 
 
 def _is_valid_request_fields(request: BridgeDownloadRequest) -> bool:
@@ -309,9 +336,7 @@ def _is_valid_request_fields(request: BridgeDownloadRequest) -> bool:
 
 
 def _is_valid_serialized_domains(domains: list[str]) -> bool:
-    return 1 <= len(domains) <= _MAX_ALLOWED_DOMAINS and all(
-        1 <= len(domain) <= _MAX_DOMAIN_LENGTH and re.fullmatch(r"[\x21-\x7e]+", domain) for domain in domains
-    )
+    return 1 <= len(domains) <= _MAX_ALLOWED_DOMAINS and all(_is_valid_wire_domain(domain) for domain in domains)
 
 
 def _is_unauthorized_envelope(response: httpx.Response, payload: dict) -> bool:
@@ -407,11 +432,10 @@ def _check_bridge_artifact(result: BridgeDownloadResult, dest_dir: Path | None) 
     try:
         with os.fdopen(fd, "rb") as handle:
             opened_stat = os.fstat(handle.fileno())
-            if not stat.S_ISREG(opened_stat.st_mode) or (opened_stat.st_dev, opened_stat.st_ino) != (
-                link_stat.st_dev,
-                link_stat.st_ino,
-            ):
+            if not stat.S_ISREG(opened_stat.st_mode):
                 return ARTIFACT_NOT_REGULAR, None
+            if (opened_stat.st_dev, opened_stat.st_ino) != (link_stat.st_dev, link_stat.st_ino):
+                return ARTIFACT_REPLACED, None
             if opened_stat.st_size != declared_size:
                 return ARTIFACT_SIZE_MISMATCH, None
             sink = None

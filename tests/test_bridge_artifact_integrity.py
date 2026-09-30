@@ -3,6 +3,8 @@ import errno
 import hashlib
 import os
 import stat
+import subprocess
+import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -12,6 +14,7 @@ from zotero_mcp.acquisition.bridge_client import (
     ARTIFACT_HASH_MISMATCH,
     ARTIFACT_MISSING,
     ARTIFACT_NOT_REGULAR,
+    ARTIFACT_REPLACED,
     ARTIFACT_SIZE_MISMATCH,
     ARTIFACT_SNAPSHOT_FAILED,
     ARTIFACT_UNREADABLE,
@@ -184,6 +187,94 @@ def test_real_unreadable_regular_file_is_not_classified_as_non_regular(bridge_ar
 
     # A privileged runner can still read the file; nobody may call it non-regular.
     assert error_code in ({None} if os.geteuid() == 0 else {ARTIFACT_UNREADABLE})
+
+
+_EMFILE_CHILD = """
+import os, resource, sys
+from zotero_mcp.acquisition.bridge_client import BridgeDownloadResult, verify_bridge_artifact
+
+result = BridgeDownloadResult(
+    "complete", "ready", file_path=sys.argv[1], sha256=sys.argv[2], size_bytes=int(sys.argv[3])
+)
+probe = os.open(os.devnull, os.O_RDONLY)
+os.close(probe)
+# The next open needs fd ``probe``, which this soft limit forbids.
+resource.setrlimit(resource.RLIMIT_NOFILE, (probe, resource.getrlimit(resource.RLIMIT_NOFILE)[1]))
+sys.stdout.write(str(verify_bridge_artifact(result)))
+"""
+
+
+def test_real_open_failure_on_regular_file_is_unreadable_for_any_user(bridge_artifact):
+    # EMFILE comes from the kernel for root and non-root alike, so this real
+    # (not injected) open failure is exercised whatever uid runs the suite.
+    result = bridge_artifact(content=CONTENT)
+
+    child = subprocess.run(
+        [sys.executable, "-c", _EMFILE_CHILD, result.file_path, result.sha256, str(result.size_bytes)],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=True,
+    )
+
+    assert child.stdout == ARTIFACT_UNREADABLE
+
+
+def _swap_after_lstat(path, swap):
+    real_lstat = os.lstat
+
+    def _lstat(file, *args, **kwargs):
+        link_stat = real_lstat(file, *args, **kwargs)
+        if os.fspath(file) == path:
+            swap(path)
+        return link_stat
+
+    return _lstat
+
+
+def _rename_identical_regular_file_over(path):
+    replacement = f"{path}.same-bytes"
+    with open(replacement, "wb") as handle:
+        handle.write(CONTENT)
+    os.replace(replacement, path)
+
+
+def _swap_in_fifo(path):
+    os.unlink(path)
+    os.mkfifo(path)
+
+
+def _swap_in_symlink(path):
+    target = f"{path}.target"
+    with open(target, "wb") as handle:
+        handle.write(CONTENT)
+    os.unlink(path)
+    os.symlink(target, path)
+
+
+@pytest.mark.parametrize(
+    ("swap", "error_code"),
+    [
+        # Another regular file, even one with the declared bytes, is a
+        # replacement, not a non-regular artifact.
+        pytest.param(_rename_identical_regular_file_over, ARTIFACT_REPLACED, id="regular-to-regular"),
+        pytest.param(_swap_in_fifo, ARTIFACT_NOT_REGULAR, id="regular-to-fifo"),
+        pytest.param(_swap_in_symlink, ARTIFACT_NOT_REGULAR, id="regular-to-symlink"),
+    ],
+)
+def test_entry_swapped_between_lstat_and_open_is_classified_by_what_was_opened(
+    bridge_artifact, tmp_path, monkeypatch, swap, error_code
+):
+    result = bridge_artifact(content=CONTENT)
+    dest = tmp_path / "private"
+    dest.mkdir()
+    monkeypatch.setattr(os, "lstat", _swap_after_lstat(result.file_path, swap))
+    assert verify_bridge_artifact(result) == error_code
+
+    result = bridge_artifact(name="again.pdf", content=CONTENT)
+    monkeypatch.setattr(os, "lstat", _swap_after_lstat(result.file_path, swap))
+    assert snapshot_bridge_artifact(result, dest) == (error_code, None)
+    assert list(dest.iterdir()) == []
 
 
 def test_snapshot_destination_failure_has_its_own_code(bridge_artifact, tmp_path):
@@ -416,6 +507,26 @@ async def test_acquire_classifies_unreadable_bridge_artifact(bridge_artifact, ma
 
     assert result["status"] == "failed"
     assert result["error_code"] == ARTIFACT_UNREADABLE
+    ingest.assert_not_called()
+    downloader_class.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("make_resolution", "config"), ROUTES)
+@pytest.mark.parametrize("auto_ingest", [True, False])
+async def test_acquire_fails_closed_when_staged_file_is_replaced_during_verification(
+    bridge_artifact, make_resolution, config, monkeypatch, auto_ingest
+):
+    bridge_result = bridge_artifact(content=CONTENT)
+    monkeypatch.setattr(os, "lstat", _swap_after_lstat(bridge_result.file_path, _rename_identical_regular_file_over))
+
+    result, ingest, downloader_class, _ = await _acquire(
+        make_resolution(), config, bridge_result, auto_ingest=auto_ingest
+    )
+
+    assert result["status"] == "failed"
+    assert result["error_code"] == ARTIFACT_REPLACED
+    assert "file_path" not in result
     ingest.assert_not_called()
     downloader_class.assert_not_called()
 

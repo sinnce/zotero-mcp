@@ -91,6 +91,31 @@ INVALID_FIELDS = [
     pytest.param({"contract_version": "1.0.0"}, id="contract-legacy"),
     pytest.param({"allowed_domains": "publisher.example"}, id="allowed-domains-string"),
     pytest.param({"allowed_domains": [1]}, id="allowed-domains-non-string"),
+    pytest.param({"allowed_domains": []}, id="allowed-domains-empty"),
+    pytest.param({"allowed_domains": ()}, id="allowed-domains-empty-tuple"),
+    pytest.param(
+        {"allowed_domains": ["publisher.example", *(f"extra{i}.example" for i in range(32))]},
+        id="allowed-domains-over-32",
+    ),
+    pytest.param({"allowed_domains": ["publisher.example", ""]}, id="allowed-domains-empty-entry"),
+    pytest.param({"allowed_domains": ["publisher.example", None]}, id="allowed-domains-none-entry"),
+    pytest.param({"allowed_domains": ["publisher.example", "bad domain"]}, id="allowed-domains-space"),
+    pytest.param({"allowed_domains": [" publisher.example"]}, id="allowed-domains-leading-space"),
+    pytest.param({"allowed_domains": ["publisher.example\n"]}, id="allowed-domains-trailing-newline"),
+    pytest.param({"allowed_domains": ["publisher.example", "caf\u00e9.example"]}, id="allowed-domains-non-ascii"),
+    pytest.param(
+        {"allowed_domains": ["publisher.example", "a" * 63 + "." + "b" * 63 + "." + "c" * 63 + "." + "d" * 62]},
+        id="allowed-domains-entry-over-253",
+    ),
+    pytest.param({"allowed_domains": ["publisher.example", "127.0.0.1"]}, id="allowed-domains-ip"),
+    pytest.param({"allowed_domains": ["publisher.example", "*.example.com"]}, id="allowed-domains-wildcard"),
+    pytest.param({"allowed_domains": ["publisher.example", "example.com/"]}, id="allowed-domains-path"),
+    pytest.param({"allowed_domains": ["publisher.example", "localhost"]}, id="allowed-domains-single-label"),
+    pytest.param({"allowed_domains": ["publisher.example."]}, id="allowed-domains-trailing-dot"),
+    pytest.param(
+        {"allowed_domains": ["publisher.example", "Publisher.EXAMPLE"]},
+        id="allowed-domains-case-insensitive-duplicate",
+    ),
 ]
 
 
@@ -145,6 +170,34 @@ def test_boundary_request_fields_are_sent(overrides):
     assert payload["expected_artifact"] == "pdf"
     assert payload["timeout_ms"] == request.timeout_ms
     assert post.call_args.kwargs["timeout"] == request.timeout_ms / 1000 + 5
+
+
+@pytest.mark.parametrize(
+    ("allowed_domains", "serialized"),
+    [
+        pytest.param(
+            ["publisher.example", *(f"extra{i}.example" for i in range(31))],
+            ["publisher.example", *(f"extra{i}.example" for i in range(31))],
+            id="exactly-32",
+        ),
+        pytest.param(
+            ("publisher.example", "a" * 63 + "." + "b" * 63 + "." + "c" * 63 + "." + "d" * 61),
+            ["publisher.example", "a" * 63 + "." + "b" * 63 + "." + "c" * 63 + "." + "d" * 61],
+            id="entry-of-253",
+        ),
+        # The server lowercases entries before matching, so this is the same allowlist.
+        pytest.param(["Publisher.EXAMPLE"], ["publisher.example"], id="lowercased"),
+    ],
+)
+def test_explicit_allowed_domains_are_sent_whole(allowed_domains, serialized):
+    with patch(
+        "zotero_mcp.acquisition.bridge_client.httpx.post",
+        return_value=_json_response(503, {**_unauthorized(), "error_code": "CAPABILITY_UNAVAILABLE"}),
+    ) as post:
+        BridgeClient(auth_token=TOKEN).download(_request(allowed_domains=allowed_domains))
+
+    post.assert_called_once()
+    assert post.call_args.kwargs["json"]["allowed_domains"] == serialized
 
 
 def test_health_recognizes_exact_unauthorized_envelope():
