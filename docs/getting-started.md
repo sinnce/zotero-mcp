@@ -200,13 +200,44 @@ When `resolve_paper_access` receives a URL, the resolver first checks whether tr
 
 Institutional access is decided by `zotero-mcp`, but browser automation is delegated to the bridge server in `packages/opencode-deep-research`.
 
+#### Operator setup for authenticated bridge calls
+
+The bridge now expects authenticated caller requests. The bridge server reads its token from `BRIDGE_TOKEN`; `zotero-mcp` reads `ZOTERO_BRIDGE_TOKEN`, then `BRIDGE_AUTH_TOKEN`, then `BRIDGE_TOKEN`. Set the same value on both sides and keep it private.
+
+What to keep in mind:
+
+- The token must be the same on both sides. The token must be 32-256 characters of `A-Z`, `a-z`, `0-9`, `_` and `-`. Like the server's `validateBridgeToken`, the caller strips surrounding whitespace (spaces, tabs, no-break and other Unicode spaces, BOM) before checking; a CR or LF anywhere, whitespace inside the token, or any other character makes it malformed.
+- Store it in a private env file, secret manager, or service definition, not in committed config or shared screenshots.
+- With no caller bridge configuration at all (none of `ZOTERO_BRIDGE_TOKEN`, `BRIDGE_AUTH_TOKEN`, `BRIDGE_TOKEN` or `BRIDGE_SERVER_URL` set), bridge calls are skipped and `acquire_paper` uses the normal direct-download path. This is the only case in which direct download is used.
+- Once any of those is set, the bridge is the only acquisition channel and `session_name` is required. An empty, missing or malformed token fails with `BRIDGE_AUTH_INVALID` and a malformed `BRIDGE_SERVER_URL` with `BRIDGE_URL_INVALID` before any bridge request; an unreachable bridge (any transport failure) fails with `BRIDGE_UNREACHABLE`, a bridge that is not ready with `CAPABILITY_UNAVAILABLE`, and an invalid readiness response with `BRIDGE_HEALTH_INVALID`. Acquisition stops on each of these and never switches to direct download.
+- `BRIDGE_ALLOWED_DOMAINS` is optional and should contain only operator-approved extra hostnames that are not already derived from the candidate URL or nested redirect targets.
+
+#### Rollout order
+
+Setting any bridge variable on the caller makes the bridge the only acquisition channel, so bring the bridge server up first.
+
+1. Set `BRIDGE_TOKEN` on the bridge server, start it, and authenticate the named browser session.
+2. Set the same value as `ZOTERO_BRIDGE_TOKEN` (or `BRIDGE_AUTH_TOKEN`) where `zotero-mcp` runs. Add `BRIDGE_ALLOWED_DOMAINS` only when you need extra approved hosts.
+3. Pass `session_name` on every `acquire_paper` call from then on.
+
+To return to direct HTTP downloads, unset every bridge variable on the caller side.
+
+#### Allowed-domain behavior
+
+`GET /bridge/health/ready` carries bearer auth only. `POST /bridge/download` carries bearer auth plus an explicit allowed-domain set.
+
+- The caller derives hosts from the requested `candidate_url`.
+- For LibProxy and other nested redirect URLs, the caller also derives hosts from nested targets, such as the proxied `url=` destination.
+- `BRIDGE_ALLOWED_DOMAINS` adds optional normalized operator-managed extras for known publisher CDNs or secondary download hosts.
+- Redirects never auto-expand trust. If a later hop lands on a host outside the derived or explicit allowlist, the bridge rejects it.
+
 The source-level flow is:
 
 1. `resolve_paper_access` normalizes the input and resolves public locations through Unpaywall, Semantic Scholar, PMC OA, arXiv, URL translators, and optional institutional access.
 2. Institutional LibProxy locations are marked with `requires_session=true` and `session_kind="libproxy"`.
-3. `acquire_paper(identifier, session_name="libproxy-snu")` checks `http://127.0.0.1:9870/bridge/health`.
-4. If the bridge is available, it sends `POST /bridge/download` with `doi`, `candidate_url`, and `session_name`.
-5. If the bridge succeeds, the returned provenance includes `bridge_session`; otherwise `acquire_paper` falls back to the standard HTTP download path.
+3. With the bridge configured, `acquire_paper(identifier, session_name="libproxy-snu")` checks `GET /bridge/health/ready` on `BRIDGE_SERVER_URL` (default `http://127.0.0.1:9870`) with bearer auth.
+4. If the bridge is ready, it sends `POST /bridge/download` with `doi`, `candidate_url`, `session_name`, and the required allowed-domain list.
+5. If the bridge succeeds, the returned provenance includes `bridge_session` and `file_path` is a caller-owned verified copy (also the file ingested with `auto_ingest=true`). Every bridge failure is terminal and returns its own `error_code`: `BRIDGE_AUTH_INVALID` or `UNAUTHORIZED` for auth, `BRIDGE_URL_INVALID` for a malformed bridge URL, `BRIDGE_UNREACHABLE`, `CAPABILITY_UNAVAILABLE` (not ready) or `BRIDGE_HEALTH_INVALID` for readiness, `BRIDGE_RESPONSE_INVALID` or `TIMEOUT` for the download, and the server's own code for a refused request. There is no fallback to direct HTTP; that path is used only when the bridge is not configured.
 
 The bridge does not automate campus login. Start and authenticate the named Pinchtab browser session before calling `acquire_paper` with `session_name`.
 

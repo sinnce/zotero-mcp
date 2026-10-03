@@ -1,18 +1,21 @@
 from __future__ import annotations
 
-import pytest
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from zotero_mcp.tools.acquire_paper import acquire_paper
+import pytest
+
+from zotero_mcp.acquisition.bridge_client import BridgeDownloadResult, BridgeHealthResult
 from zotero_mcp.acquisition.config import AcquisitionConfig, InstitutionalConfig
-from zotero_mcp.acquisition.bridge_client import BridgeDownloadResult
 from zotero_mcp.acquisition.types import (
     AccessLocation,
     AccessResolution,
     ArtifactDownload,
     IngestResult,
 )
+from zotero_mcp.tools.acquire_paper import acquire_paper
+
+READY_HEALTH = BridgeHealthResult(True, "http://127.0.0.1:9870", "ready", "Bridge is ready.")
 
 
 @pytest.fixture
@@ -243,8 +246,9 @@ class TestAcquireIngest:
         assert "zotero_item_key" not in result
         mock_ingest.assert_not_called()
 
-    async def test_direct_browser_access_precedes_libproxy_fallback(self, mock_ctx):
+    async def test_direct_browser_access_precedes_libproxy_fallback(self, mock_ctx, bridge_artifact):
         resolution = make_resolution(metadata={"title": "Campus Access"}, requires_session=True)
+        resolution.best_location.url = "https://libproxy.snu.ac.kr/link.n2s?url=https%3A%2F%2Fdoi.org%2F10.1234%2Ftest"
         resolution.best_location.session_kind = "libproxy"
 
         config = AcquisitionConfig(
@@ -255,11 +259,7 @@ class TestAcquireIngest:
             )
         )
 
-        direct_result = BridgeDownloadResult(
-            status="complete",
-            auth_state="ready",
-            file_path="/tmp/direct.pdf",
-        )
+        direct_result = bridge_artifact("direct.pdf")
 
         with (
             patch("zotero_mcp.tools.acquire_paper.load_acquisition_config", return_value=config),
@@ -267,8 +267,9 @@ class TestAcquireIngest:
             patch("zotero_mcp.tools.acquire_paper.BridgeClient") as MockBridge,
         ):
             mock_bridge = MagicMock()
-            mock_bridge.is_available.return_value = True
-            mock_bridge.download.return_value = direct_result
+            mock_bridge.configured = True
+            mock_bridge.health = AsyncMock(return_value=READY_HEALTH)
+            mock_bridge.download = AsyncMock(return_value=direct_result)
             MockBridge.return_value = mock_bridge
 
             result = await acquire_paper("10.1234/test", session_name="libproxy-snu", ctx=mock_ctx)
@@ -276,11 +277,11 @@ class TestAcquireIngest:
         assert result["status"] == "complete"
         assert result["message"] == "Downloaded via direct browser access"
         assert result["provenance"]["access_source"] == "direct"
-        mock_bridge.download.assert_called_once()
+        mock_bridge.download.assert_awaited_once()
         direct_request = mock_bridge.download.call_args[0][0]
         assert direct_request.candidate_url == "https://doi.org/10.1234/test"
 
-    async def test_libproxy_fallback_only_after_explicit_paywall(self, mock_ctx):
+    async def test_libproxy_fallback_only_after_explicit_paywall(self, mock_ctx, bridge_artifact):
         resolution = make_resolution(metadata={"title": "Fallback Access"}, requires_session=True)
         resolution.best_location.url = "https://libproxy.snu.ac.kr/link.n2s?url=https%3A%2F%2Fdoi.org%2F10.1234%2Ftest"
         resolution.best_location.session_kind = "libproxy"
@@ -299,11 +300,7 @@ class TestAcquireIngest:
             error_code="AUTH_REQUIRED",
             message="Login form detected",
         )
-        proxy_result = BridgeDownloadResult(
-            status="complete",
-            auth_state="ready",
-            file_path="/tmp/proxy.pdf",
-        )
+        proxy_result = bridge_artifact("proxy.pdf")
 
         with (
             patch("zotero_mcp.tools.acquire_paper.load_acquisition_config", return_value=config),
@@ -311,8 +308,9 @@ class TestAcquireIngest:
             patch("zotero_mcp.tools.acquire_paper.BridgeClient") as MockBridge,
         ):
             mock_bridge = MagicMock()
-            mock_bridge.is_available.return_value = True
-            mock_bridge.download.side_effect = [direct_result, proxy_result]
+            mock_bridge.configured = True
+            mock_bridge.health = AsyncMock(return_value=READY_HEALTH)
+            mock_bridge.download = AsyncMock(side_effect=[direct_result, proxy_result])
             MockBridge.return_value = mock_bridge
 
             result = await acquire_paper("10.1234/test", session_name="libproxy-snu", ctx=mock_ctx)
@@ -325,7 +323,43 @@ class TestAcquireIngest:
         assert first_request.candidate_url == "https://doi.org/10.1234/test"
         assert second_request.candidate_url == resolution.best_location.url
 
-    async def test_explicit_libproxy_url_uses_bridge_with_session_name(self, mock_ctx):
+    async def test_domain_blocked_direct_browser_access_falls_back_to_libproxy(self, mock_ctx, bridge_artifact):
+        resolution = make_resolution(metadata={"title": "Blocked Direct Access"}, requires_session=True)
+        resolution.best_location.url = "https://libproxy.snu.ac.kr/link.n2s?url=https%3A%2F%2Fdoi.org%2F10.1234%2Ftest"
+        resolution.best_location.session_kind = "libproxy"
+        config = AcquisitionConfig(
+            institutional_access=InstitutionalConfig(
+                enabled=True,
+                provider="libproxy",
+                libproxy_base_url="https://libproxy.snu.ac.kr/link.n2s",
+            )
+        )
+        direct_result = BridgeDownloadResult(
+            status="failed",
+            auth_state="ready",
+            error_code="DOMAIN_BLOCKED",
+            message="Candidate domain denied",
+        )
+        proxy_result = bridge_artifact("proxy.pdf")
+
+        with (
+            patch("zotero_mcp.tools.acquire_paper.load_acquisition_config", return_value=config),
+            patch("zotero_mcp.tools.acquire_paper.resolve_access", new=AsyncMock(return_value=resolution)),
+            patch("zotero_mcp.tools.acquire_paper.BridgeClient") as MockBridge,
+        ):
+            mock_bridge = MagicMock()
+            mock_bridge.configured = True
+            mock_bridge.health = AsyncMock(return_value=READY_HEALTH)
+            mock_bridge.download = AsyncMock(side_effect=[direct_result, proxy_result])
+            MockBridge.return_value = mock_bridge
+
+            result = await acquire_paper("10.1234/test", session_name="libproxy-snu", ctx=mock_ctx)
+
+        assert result["status"] == "complete"
+        assert result["provenance"]["access_source"] == "institutional"
+        assert mock_bridge.download.call_count == 2
+
+    async def test_explicit_libproxy_url_uses_bridge_with_session_name(self, mock_ctx, bridge_artifact):
         resolution = make_resolution(identifier_type="url")
         resolution.best_location.url = "https://libproxy.snu.ac.kr/link.n2s?url=https%3A%2F%2Fexample.com%2Fpaper"
         resolution.best_location.access_method = "direct"
@@ -339,11 +373,7 @@ class TestAcquireIngest:
             )
         )
 
-        bridge_result = BridgeDownloadResult(
-            status="complete",
-            auth_state="ready",
-            file_path="/tmp/libproxy-url.pdf",
-        )
+        bridge_result = bridge_artifact("libproxy-url.pdf")
 
         with (
             patch("zotero_mcp.tools.acquire_paper.load_acquisition_config", return_value=config),
@@ -351,8 +381,9 @@ class TestAcquireIngest:
             patch("zotero_mcp.tools.acquire_paper.BridgeClient") as MockBridge,
         ):
             mock_bridge = MagicMock()
-            mock_bridge.is_available.return_value = True
-            mock_bridge.download.return_value = bridge_result
+            mock_bridge.configured = True
+            mock_bridge.health = AsyncMock(return_value=READY_HEALTH)
+            mock_bridge.download = AsyncMock(return_value=bridge_result)
             MockBridge.return_value = mock_bridge
 
             result = await acquire_paper(resolution.best_location.url, session_name="libproxy-snu", ctx=mock_ctx)
@@ -360,6 +391,6 @@ class TestAcquireIngest:
         assert result["status"] == "complete"
         assert result["provenance"]["bridge_session"] == "libproxy-snu"
         assert result["provenance"]["access_source"] == "institutional"
-        mock_bridge.download.assert_called_once()
+        mock_bridge.download.assert_awaited_once()
         request = mock_bridge.download.call_args[0][0]
         assert request.candidate_url == resolution.best_location.url

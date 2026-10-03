@@ -1,0 +1,2095 @@
+{
+ "request_schema": {
+  "client-request": {
+   "allowed_domains": [
+    "publisher.example"
+   ],
+   "candidate_url": "https://publisher.example/paper.pdf",
+   "contract_version": "2.0.0",
+   "doi": "10.1000/example",
+   "expected_artifact": "pdf",
+   "request_id": "11111111-1111-4111-8111-111111111111",
+   "session_name": "campus",
+   "timeout_ms": 60000
+  },
+  "without-expected-artifact-and-timeout": {
+   "allowed_domains": [
+    "publisher.example"
+   ],
+   "candidate_url": "https://publisher.example/paper.pdf",
+   "contract_version": "2.0.0",
+   "doi": "10.1000/example",
+   "expected_artifact": "pdf",
+   "request_id": "11111111-1111-4111-8111-111111111111",
+   "session_name": "campus",
+   "timeout_ms": 60000
+  }
+ },
+ "requests": {
+  "allowed-domain-254": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "INVALID_REQUEST",
+    "message": "Invalid request.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 400,
+   "wire_sha256": "fee69a505d91420a57873d17b40592a339db14057e9f496604374600682355a5"
+  },
+  "allowed-domains-33": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "INVALID_REQUEST",
+    "message": "Invalid request.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 400,
+   "wire_sha256": "4715a0af09e4148c71d10722a6ee363183f37286e1f0b61e7eff86aa70e35016"
+  },
+  "allowlist-duplicate-case-insensitive": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "DOMAIN_BLOCKED",
+    "message": "Destination domain is blocked.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 422,
+   "wire_sha256": "198077ae33fd1e2e33fb6782d87a68e50f054526acec4743b3743438cdaa3689"
+  },
+  "allowlist-entry-253": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "CAPABILITY_UNAVAILABLE",
+    "message": "Browser interception is unavailable.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 503,
+   "wire_sha256": "265aa65af77c23163222d377c4d694a8c76290ab2eef14b93fcbb8e92fbf89cd"
+  },
+  "allowlist-entry-bare-ace-prefix": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "DOMAIN_BLOCKED",
+    "message": "Destination domain is blocked.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 422,
+   "wire_sha256": "0a8cd243994b454a090b50112eea28cf5745b4f487217e22c6ec4b3b7087b038"
+  },
+  "allowlist-entry-empty-label": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "DOMAIN_BLOCKED",
+    "message": "Destination domain is blocked.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 422,
+   "wire_sha256": "116370d1c76a56f4b22f606c2c1fc2f84c18d268d29c29a344bdf2f602296795"
+  },
+  "allowlist-entry-ends-in-hex": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "CAPABILITY_UNAVAILABLE",
+    "message": "Browser interception is unavailable.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 503,
+   "wire_sha256": "391a011c7efc53b06ae0892ed5e2d4d2064431e7346504e7922dd816a9b30c24"
+  },
+  "allowlist-entry-ends-in-letter-digit": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "CAPABILITY_UNAVAILABLE",
+    "message": "Browser interception is unavailable.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 503,
+   "wire_sha256": "b9a84ff0a4064790899c16a40a12d42985aa7db1f602a615943df93e67b5ecce"
+  },
+  "allowlist-entry-ends-in-number": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "CAPABILITY_UNAVAILABLE",
+    "message": "Browser interception is unavailable.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 503,
+   "wire_sha256": "1b9551b5838027c92a011547c63129c2c792ccb9ed284fa502dd923828dd1370"
+  },
+  "allowlist-entry-ip": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "DOMAIN_BLOCKED",
+    "message": "Destination domain is blocked.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 422,
+   "wire_sha256": "3e2d086f129edb236e015634dffbc735b90772ba383a082ccbe4962b5d72f7a3"
+  },
+  "allowlist-entry-ipv4-leading-zero": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "CAPABILITY_UNAVAILABLE",
+    "message": "Browser interception is unavailable.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 503,
+   "wire_sha256": "e2e8a3bbf3ed08878a4c09c3ada3ca3436bf8b824b17ccb487c8b5970e1937ff"
+  },
+  "allowlist-entry-label-64": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "DOMAIN_BLOCKED",
+    "message": "Destination domain is blocked.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 422,
+   "wire_sha256": "2d609e463e34c1e4f0b35b0452306aa406c6a91a3a9e559edd0f770917f61469"
+  },
+  "allowlist-entry-leading-hyphen": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "DOMAIN_BLOCKED",
+    "message": "Destination domain is blocked.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 422,
+   "wire_sha256": "352a835c5a50f34aef7cfa30f79c48170c7da53bb875b1844bfed78312f0a43c"
+  },
+  "allowlist-entry-path": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "DOMAIN_BLOCKED",
+    "message": "Destination domain is blocked.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 422,
+   "wire_sha256": "ad879dd393650d2db57793620f9c69aa921344f6c28f79b809a83450201140ff"
+  },
+  "allowlist-entry-port": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "DOMAIN_BLOCKED",
+    "message": "Destination domain is blocked.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 422,
+   "wire_sha256": "512ff404e8ea72636e0ea4bdf769df26b3ea2a7dbf8768bdf393c23c4118a53c"
+  },
+  "allowlist-entry-punycode": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "CAPABILITY_UNAVAILABLE",
+    "message": "Browser interception is unavailable.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 503,
+   "wire_sha256": "c56fb4a01b4b35ffc5056604fbe172226c9d7a2c8b66429f8e61b595714f3b40"
+  },
+  "allowlist-entry-single-label": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "DOMAIN_BLOCKED",
+    "message": "Destination domain is blocked.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 422,
+   "wire_sha256": "97888555e9470c3b420d54d7d2c5848de0d30d38c8386fb6dd3471920f1299d1"
+  },
+  "allowlist-entry-three-numbers": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "CAPABILITY_UNAVAILABLE",
+    "message": "Browser interception is unavailable.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 503,
+   "wire_sha256": "248296ffbaad19abb479076447630632f7e6b0e239938be25890bf6c41070828"
+  },
+  "allowlist-entry-trailing-dot": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "DOMAIN_BLOCKED",
+    "message": "Destination domain is blocked.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 422,
+   "wire_sha256": "3f131a5484f991770b6a5a8478e1e59fdd8148a8911d2fea8469a4705ab2796c"
+  },
+  "allowlist-entry-unchecked-punycode": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "CAPABILITY_UNAVAILABLE",
+    "message": "Browser interception is unavailable.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 503,
+   "wire_sha256": "bdd5e1bb5277c8431b803b733866db33d5ed0a2e21aee92715476c34d6185a65"
+  },
+  "allowlist-entry-underscore": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "DOMAIN_BLOCKED",
+    "message": "Destination domain is blocked.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 422,
+   "wire_sha256": "b9798275d1b69b40006a166228e5aca36bca875679744cc9009b2041680f1ce3"
+  },
+  "allowlist-entry-wildcard": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "DOMAIN_BLOCKED",
+    "message": "Destination domain is blocked.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 422,
+   "wire_sha256": "17abdab495757ac9459d8857d5241a8d4d97a7f5f56e2ee7ac1bcb29dba614ad"
+  },
+  "allowlist-mixed-case-entry": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "CAPABILITY_UNAVAILABLE",
+    "message": "Browser interception is unavailable.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 503,
+   "wire_sha256": "a1102df030befe6e6c2ca3d7124219227b877fe9f63cd13df8e9b82229ad3e6a"
+  },
+  "body-16384-bytes-not-too-large": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "INVALID_REQUEST",
+    "message": "Invalid request.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 400,
+   "wire_sha256": "865296e357226f90e78042e020a2430c8a55ba86d4e9392e4690c7667bc16995"
+  },
+  "body-16385-bytes": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "REQUEST_TOO_LARGE",
+    "message": "Request body too large.",
+    "request_id": null,
+    "status": "failed"
+   },
+   "http_status": 413,
+   "wire_sha256": "9c05bd631851034e6aaa68ed3e57519a625064138bb555b7daa7dda103849803"
+  },
+  "body-json-escapes-count": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "REQUEST_TOO_LARGE",
+    "message": "Request body too large.",
+    "request_id": null,
+    "status": "failed"
+   },
+   "http_status": 413,
+   "wire_sha256": "807dbe3e1c80e59a85dfbe7d37c7e5e7cdf45267c72ae025fceaf9dc08b31da9"
+  },
+  "body-multibyte-16385-bytes": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "REQUEST_TOO_LARGE",
+    "message": "Request body too large.",
+    "request_id": null,
+    "status": "failed"
+   },
+   "http_status": 413,
+   "wire_sha256": "ee81ea6557ee48d825a27d1d7241a000616a7ccb920da6a079f97eba2cd6999e"
+  },
+  "candidate-url-2048": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "CAPABILITY_UNAVAILABLE",
+    "message": "Browser interception is unavailable.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 503,
+   "wire_sha256": "993727ce90641c276d1946a4c4ae330de809fcc89c6079039083da3ba4c1b18a"
+  },
+  "candidate-url-2049": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "INVALID_REQUEST",
+    "message": "Invalid request.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 400,
+   "wire_sha256": "627eec4bafad0cbfee7410635b5c5645272cf677189d1c02440c1179106a8dcd"
+  },
+  "candidate-url-non-ascii": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "INVALID_REQUEST",
+    "message": "Invalid request.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 400,
+   "wire_sha256": "89fe9e865165b75a17202a2e3b0ef68bb629c7e52f5cf91955e8af42e983a1a4"
+  },
+  "candidate-url-tab": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "INVALID_REQUEST",
+    "message": "Invalid request.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 400,
+   "wire_sha256": "4f7a10e696e6718f7e327b49b8a3b70c69647091f10f84632fb74dfa87c3578f"
+  },
+  "doi-512-astral-code-points": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "CAPABILITY_UNAVAILABLE",
+    "message": "Browser interception is unavailable.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 503,
+   "wire_sha256": "df18f1846cb6f1cac528040473f7d8d8ea9d475748ce84849072234946301d3d"
+  },
+  "doi-513-code-points": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "INVALID_REQUEST",
+    "message": "Invalid request.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 400,
+   "wire_sha256": "8d5af16a45d2e161dbb318438d6a60483c7486dd6e35b18c27caacf6909b53df"
+  },
+  "doi-inner-space": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "CAPABILITY_UNAVAILABLE",
+    "message": "Browser interception is unavailable.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 503,
+   "wire_sha256": "5998461a52e8ec29908c2b07ade612e2fcd53a88ed6103f80df2f6afd0db8da5"
+  },
+  "doi-leading-bom": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "INVALID_REQUEST",
+    "message": "Invalid request.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 400,
+   "wire_sha256": "002be7d5e4a4b1bbd40ee0f975ae486ddfaba1585c3b695c0d9a9bc5dc5444df"
+  },
+  "doi-leading-file-separator": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "CAPABILITY_UNAVAILABLE",
+    "message": "Browser interception is unavailable.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 503,
+   "wire_sha256": "e0197fdf553d447aea217daf2eca6b2b7fa9d0e867e85647c279288ec1c62b52"
+  },
+  "doi-leading-mongolian-vowel-separator": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "CAPABILITY_UNAVAILABLE",
+    "message": "Browser interception is unavailable.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 503,
+   "wire_sha256": "895ecaaac0b78e853ebaa5fb123aeca2adfa079f8a9bf6cb25070fccfc788a0f"
+  },
+  "doi-leading-nbsp": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "INVALID_REQUEST",
+    "message": "Invalid request.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 400,
+   "wire_sha256": "71a0908fd4456a2a7617d37357845d81ab0d5601a2f6fa9ee3994a83ca3da84a"
+  },
+  "doi-leading-next-line": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "CAPABILITY_UNAVAILABLE",
+    "message": "Browser interception is unavailable.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 503,
+   "wire_sha256": "b31491feb4ab3c4cfe9bc87ff33244e93ab3d00c7c06167fd5200314f69dfdc2"
+  },
+  "doi-leading-space": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "INVALID_REQUEST",
+    "message": "Invalid request.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 400,
+   "wire_sha256": "7e340a0c3940c8f6fae1053c58c88f30daf1472d89f881165830a0b1ca120dbb"
+  },
+  "doi-leading-zero-width-space": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "CAPABILITY_UNAVAILABLE",
+    "message": "Browser interception is unavailable.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 503,
+   "wire_sha256": "13e8640d4aa0c56f58f337d0d3a4536bc2a4d9ba4d6093d3cb428d0c1db3058d"
+  },
+  "doi-only-whitespace": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "INVALID_REQUEST",
+    "message": "Invalid request.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 400,
+   "wire_sha256": "cf8a929c0dc1d78fcdcdc88dc4f39e37345cfe51f06bba11f2d4795b4107f101"
+  },
+  "doi-trailing-ideographic-space": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "INVALID_REQUEST",
+    "message": "Invalid request.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 400,
+   "wire_sha256": "6f72fb1dd63fe42c137c3cdfacb14580d7a32ba411b299ed28cb53cbbccb4574"
+  },
+  "doi-trailing-line-separator": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "INVALID_REQUEST",
+    "message": "Invalid request.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 400,
+   "wire_sha256": "6fbc1d228d3d7dd789b1131625f43f6d6f63ffd649e0119dfcb62bc90d56e680"
+  },
+  "doi-trailing-newline": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "INVALID_REQUEST",
+    "message": "Invalid request.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 400,
+   "wire_sha256": "b16fef38f1a272dd4770b3c7394e071fd55c1c63f16abd2a035589175c272b78"
+  },
+  "doi-trailing-tab": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "INVALID_REQUEST",
+    "message": "Invalid request.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 400,
+   "wire_sha256": "5170621c63e465309ab3fa0e29240bdb5b38d4961464fa78880a4be51c6cbca0"
+  },
+  "doi-trailing-unit-separator": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "CAPABILITY_UNAVAILABLE",
+    "message": "Browser interception is unavailable.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 503,
+   "wire_sha256": "0f58c2a3d0053304ae80fca961f5a0c21655ea753db08d343bfb5ce70f7d3661"
+  },
+  "fragment": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "INVALID_REQUEST",
+    "message": "Invalid request.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 400,
+   "wire_sha256": "1d37653c2bf30529eddac71a5d361fcba0b72b31d19e2128c135cd3938535d92"
+  },
+  "fragment-empty": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "CAPABILITY_UNAVAILABLE",
+    "message": "Browser interception is unavailable.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 503,
+   "wire_sha256": "bb173844b56051c5276e5f29918bf9e72cd8386e62b139a70c8ab72f9a3c82f7"
+  },
+  "fuzz-ace-label-refused": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "INVALID_REQUEST",
+    "message": "Invalid request.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 400,
+   "wire_sha256": "2a5fa9f74109bf90d7123a0198174f8a4f702b50fd7c8b0bf721fdb7c8be2e41"
+  },
+  "fuzz-ace-label-refused-2": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "INVALID_REQUEST",
+    "message": "Invalid request.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 400,
+   "wire_sha256": "9bce1ddca1d48cf54499b47f38a32cebdd87b3b6a57574ff2c1e0391d7c7702f"
+  },
+  "fuzz-ace-label-valid": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "CAPABILITY_UNAVAILABLE",
+    "message": "Browser interception is unavailable.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 503,
+   "wire_sha256": "282d3db24613fa1283cd22df7891e79b9b8c509fde20b4ed162614872094e4d4"
+  },
+  "fuzz-ace-label-with-basic-part": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "CAPABILITY_UNAVAILABLE",
+    "message": "Browser interception is unavailable.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 503,
+   "wire_sha256": "75d3792738c54ebb61356917311dbd5ecd8a90148ba39515d02984f5667a9eae"
+  },
+  "fuzz-order-ace-before-scheme": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "INVALID_REQUEST",
+    "message": "Invalid request.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 400,
+   "wire_sha256": "e0e0e40288ba95c65c5dd04145bc85ca66cf5f247c56b8c2d214e3814aaa085d"
+  },
+  "fuzz-order-ace-before-scheme-2": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "INVALID_REQUEST",
+    "message": "Invalid request.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 400,
+   "wire_sha256": "0041030083ba47d06d197926cd74e5428b3c9cb7fb5635919123cdc838b2a9e2"
+  },
+  "fuzz-percent-encoded-latin": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "CAPABILITY_UNAVAILABLE",
+    "message": "Browser interception is unavailable.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 503,
+   "wire_sha256": "fb9f60165fbce1ae673367e7e1c86a1904f2d1e9b180cd66f8bda78786842f0c"
+  },
+  "fuzz-percent-encoded-rtl-single-label": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "INVALID_REQUEST",
+    "message": "Invalid request.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 400,
+   "wire_sha256": "001dd880127a38dbee1e0e20528dfaea4a05c17bf558fb5680f14c569c7554bb"
+  },
+  "host-idna-not-allowlisted": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "DOMAIN_BLOCKED",
+    "message": "Destination domain is blocked.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 422,
+   "wire_sha256": "651e611b4b3a1085b6d5df1b47b04af0073073184665d2b56c53033e8beab256"
+  },
+  "host-ipv4": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "DOMAIN_BLOCKED",
+    "message": "Destination domain is blocked.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 422,
+   "wire_sha256": "0954ebb9bd38a6d993d99811a372e7f111ab5d7436a3cb55e0869c196135e19d"
+  },
+  "host-ipv4-hex": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "DOMAIN_BLOCKED",
+    "message": "Destination domain is blocked.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 422,
+   "wire_sha256": "a53836744cb51fb3863fe0469a5913768339be574dc8b4b6b9c5fe6277e5f635"
+  },
+  "host-ipv6": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "DOMAIN_BLOCKED",
+    "message": "Destination domain is blocked.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 422,
+   "wire_sha256": "3e0163636256daf479701038ab4b7204ede5291dc3ea2481531cb8a093308cdf"
+  },
+  "host-label-64": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "DOMAIN_BLOCKED",
+    "message": "Destination domain is blocked.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 422,
+   "wire_sha256": "9af5f0585f6d3c70403705174bacb88e4a9fc91e9ccfa5d46996d279ac087222"
+  },
+  "host-punycode-all-ascii": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "INVALID_REQUEST",
+    "message": "Invalid request.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 400,
+   "wire_sha256": "a8ccacea41d7fe9d2baf9de1a6bd3befae286f96f6e46633d793ffcf9d95f21a"
+  },
+  "host-punycode-empty": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "INVALID_REQUEST",
+    "message": "Invalid request.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 400,
+   "wire_sha256": "8e9ac79be612a98b4bb48f8c028be80095dbfa16d5ee26e4cdbf9bbd534f06b0"
+  },
+  "host-single-label": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "DOMAIN_BLOCKED",
+    "message": "Destination domain is blocked.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 422,
+   "wire_sha256": "928187342c9234cbb495dfefd0c6c8ee02e24be91e505983a8151bcbe021fa1b"
+  },
+  "host-trailing-dot": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "DOMAIN_BLOCKED",
+    "message": "Destination domain is blocked.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 422,
+   "wire_sha256": "2bf7fdeef7763c73e3163c32c218e46406ed116a4f213b47d618d9b88189ce8e"
+  },
+  "host-underscore": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "DOMAIN_BLOCKED",
+    "message": "Destination domain is blocked.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 422,
+   "wire_sha256": "fe02c0c5ee4267b69c31fc8b3dbdb660028cc7035ff506abe5e9cec2e6bb4135"
+  },
+  "id-echoed-on-accept": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "CAPABILITY_UNAVAILABLE",
+    "message": "Browser interception is unavailable.",
+    "request_id": "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA",
+    "status": "failed"
+   },
+   "http_status": 503,
+   "wire_sha256": "cc1cbb041caf81ba785d3c27164e19093a762370547a2682fe1d2af48a5c1556"
+  },
+  "id-echoed-on-bad-timeout": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "INVALID_REQUEST",
+    "message": "Invalid request.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 400,
+   "wire_sha256": "615bff1385a392b53e1f4d7eec2fe037017561a70f135bb760ac9e5889b8ad57"
+  },
+  "id-echoed-on-doi-whitespace": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "INVALID_REQUEST",
+    "message": "Invalid request.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 400,
+   "wire_sha256": "7e340a0c3940c8f6fae1053c58c88f30daf1472d89f881165830a0b1ca120dbb"
+  },
+  "id-echoed-on-domain-blocked": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "DOMAIN_BLOCKED",
+    "message": "Destination domain is blocked.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 422,
+   "wire_sha256": "eb89725cb53aded480d04090417762f011fccf6b1a4d9d4040c14545162e2a44"
+  },
+  "id-echoed-on-legacy-version": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "LEGACY_DISABLED",
+    "message": "Legacy bridge protocol is disabled.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 400,
+   "wire_sha256": "5369d4385a82331240a0f9f9a25acb778eca5ee37aeae4be366147630c237fc9"
+  },
+  "id-echoed-on-schema-error": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "INVALID_REQUEST",
+    "message": "Invalid request.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 400,
+   "wire_sha256": "63b0a245d9ff9f10ae996d83bc4d5977919b996b14fa5126a86714511c867f6f"
+  },
+  "id-echoed-on-scheme-blocked": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "URL_SCHEME_BLOCKED",
+    "message": "URL scheme is blocked.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 422,
+   "wire_sha256": "01ce40391f6a04a0cdda0c11e173534b76cf1a5402e873d1bd1aead06d39c386"
+  },
+  "id-echoed-on-unsupported-version": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "UNSUPPORTED_CONTRACT_VERSION",
+    "message": "Unsupported contract version.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 400,
+   "wire_sha256": "39cc55a396c0cbe0a4d54e83532a867ee94b70094eb917f2e108a70945a9640a"
+  },
+  "id-nil-uuid-echoed": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "DOMAIN_BLOCKED",
+    "message": "Destination domain is blocked.",
+    "request_id": "00000000-0000-0000-0000-000000000000",
+    "status": "failed"
+   },
+   "http_status": 422,
+   "wire_sha256": "7b8ed455023cd0da59dfeed8b2f02c0e9e7966761d1a8c86a720cf03a47ee992"
+  },
+  "id-null-when-invalid-on-legacy-version": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "LEGACY_DISABLED",
+    "message": "Legacy bridge protocol is disabled.",
+    "request_id": null,
+    "status": "failed"
+   },
+   "http_status": 400,
+   "wire_sha256": "076c8c5ff16112bdf98a0131e4b603b82b5de597d4267df2738202810a47a3d7"
+  },
+  "id-null-when-not-a-string": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "INVALID_REQUEST",
+    "message": "Invalid request.",
+    "request_id": null,
+    "status": "failed"
+   },
+   "http_status": 400,
+   "wire_sha256": "8e1aa76119b44b810a6f1baaf6fdaddb52adeabe4f642ae2d7d1682062d1051d"
+  },
+  "id-null-when-too-large": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "REQUEST_TOO_LARGE",
+    "message": "Request body too large.",
+    "request_id": null,
+    "status": "failed"
+   },
+   "http_status": 413,
+   "wire_sha256": "d1d17fa0d496fa53953d1eb03a7708e2e5e9a83630c70929d30ad71e5e821977"
+  },
+  "id-null-when-trailing-newline": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "INVALID_REQUEST",
+    "message": "Invalid request.",
+    "request_id": null,
+    "status": "failed"
+   },
+   "http_status": 400,
+   "wire_sha256": "9fe516519f9bb3b537a5aa6a86fee46a054aff1f5319f7d0537b8cd823170569"
+  },
+  "id-uppercase-echoed-as-sent": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "DOMAIN_BLOCKED",
+    "message": "Destination domain is blocked.",
+    "request_id": "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA",
+    "status": "failed"
+   },
+   "http_status": 422,
+   "wire_sha256": "43aeed7c2ad4d55dc039843e08dd612c0461eb14e25e4ce417bb941dcd91ce1d"
+  },
+  "idna-bidi-rule": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "INVALID_REQUEST",
+    "message": "Invalid request.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 400,
+   "wire_sha256": "a7fb5a26a4705eb4938aecc51b008cea7fa28c5785ec598649c8f47e59f41353"
+  },
+  "idna-contextj-zwj": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "INVALID_REQUEST",
+    "message": "Invalid request.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 400,
+   "wire_sha256": "ad3c4dea26a85f2c3795b9b16e9bea1fdc7290f4f066539be48367214523c634"
+  },
+  "idna-deviation-nontransitional": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "CAPABILITY_UNAVAILABLE",
+    "message": "Browser interception is unavailable.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 503,
+   "wire_sha256": "a910bf98852ed5064df85ee6bfc01302644f0493b52340729499572b451facc9"
+  },
+  "idna-deviation-not-transitional": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "DOMAIN_BLOCKED",
+    "message": "Destination domain is blocked.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 422,
+   "wire_sha256": "bca7a7fd9dada201f113527b3d723575d7272ae3080f7b2b38b4910ea1f0ee02"
+  },
+  "idna-disallowed-code-point": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "INVALID_REQUEST",
+    "message": "Invalid request.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 400,
+   "wire_sha256": "cfddf9948f35ae272197fd279e9428caca73d570a6940f0f4b9048664eb9d8d5"
+  },
+  "idna-ignored-soft-hyphen": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "CAPABILITY_UNAVAILABLE",
+    "message": "Browser interception is unavailable.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 503,
+   "wire_sha256": "8612c53652716114423a152e6725c7f293f5a5ce47a347e654faef962029a514"
+  },
+  "idna-leading-combining-mark": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "INVALID_REQUEST",
+    "message": "Invalid request.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 400,
+   "wire_sha256": "91a854d2164ce12e1c637a48b25d09f3d3357639fb07c21bf12ffa79a13dc989"
+  },
+  "idna-mapped-fullwidth": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "CAPABILITY_UNAVAILABLE",
+    "message": "Browser interception is unavailable.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 503,
+   "wire_sha256": "ddc1e0c999c142100bb5f8182f2aa8ad004c099e486e6245ea456b65d4f33013"
+  },
+  "idna-percent-encoded-host-allowlisted": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "CAPABILITY_UNAVAILABLE",
+    "message": "Browser interception is unavailable.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 503,
+   "wire_sha256": "5b6e020dbeb813c41c9da3cf72e434a4db64de3f776828c964d93113d2260fdd"
+  },
+  "idna-punycode-host-allowlisted": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "CAPABILITY_UNAVAILABLE",
+    "message": "Browser interception is unavailable.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 503,
+   "wire_sha256": "cf821bbcae568cb4d78327d79bcbc0a90246f4ce3088cd0a8608c3af4050b058"
+  },
+  "idna-undecodable-punycode": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "INVALID_REQUEST",
+    "message": "Invalid request.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 400,
+   "wire_sha256": "9e8c24c60c40328399d7e6b40c95036b30724ca3021b0c514a6c23e280ffd626"
+  },
+  "idna-uppercase-ace-prefix": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "CAPABILITY_UNAVAILABLE",
+    "message": "Browser interception is unavailable.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 503,
+   "wire_sha256": "3999084e26e1c25ab0be98c3675858c07b9ddc6c38f97af33b69249b82f3e8e0"
+  },
+  "lone-percent": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "INVALID_REQUEST",
+    "message": "Invalid request.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 400,
+   "wire_sha256": "26eeb4401bd738afcf0ec946600e108d1910f61567579bd4e7292cf27ec1e15e"
+  },
+  "lone-percent-at-end": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "INVALID_REQUEST",
+    "message": "Invalid request.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 400,
+   "wire_sha256": "2844776251b933d3a5bcb722691a99e1cb968cb08c51ad545d86f52f8ad3d5b7"
+  },
+  "match-parent-of-allowed": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "DOMAIN_BLOCKED",
+    "message": "Destination domain is blocked.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 422,
+   "wire_sha256": "6e3f19032555e84f914c72903af1754d96ef7eb60d4cd4da14c93eb237069817"
+  },
+  "match-second-entry": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "CAPABILITY_UNAVAILABLE",
+    "message": "Browser interception is unavailable.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 503,
+   "wire_sha256": "e49988f7d221397769d521c0fd654e3d23bd6b5c1f739f2c31d673f8bfea4df6"
+  },
+  "match-subdomain": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "CAPABILITY_UNAVAILABLE",
+    "message": "Browser interception is unavailable.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 503,
+   "wire_sha256": "41eab5c1ea187f90838e9d9bbd99738ece57658bc4a2269ddecf851cefa7620e"
+  },
+  "match-suffix-without-dot": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "DOMAIN_BLOCKED",
+    "message": "Destination domain is blocked.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 422,
+   "wire_sha256": "ae2fb7f8f3cc0657601b71730e426ad3ec036abddc2adad3bf3f66f4335103f3"
+  },
+  "order-doi-trim-before-scheme": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "INVALID_REQUEST",
+    "message": "Invalid request.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 400,
+   "wire_sha256": "f43b7ed2f08d764c4bd50b628b87f399a4db9317c2d3843ce2863fb6029d44c8"
+  },
+  "order-empty-allowlist-before-scheme": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "INVALID_REQUEST",
+    "message": "Invalid request.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 400,
+   "wire_sha256": "7f27f40263f683c8ee3c76b4119604be81fcf9363f92b693493e9553c2714db3"
+  },
+  "order-fragment-before-allowlist": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "INVALID_REQUEST",
+    "message": "Invalid request.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 400,
+   "wire_sha256": "5daf79aebb26e4bf0644a775ba1b4a39215236fb6f3eadf6c1b2cc71fb60b85b"
+  },
+  "order-host-before-allowlist": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "DOMAIN_BLOCKED",
+    "message": "Destination domain is blocked.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 422,
+   "wire_sha256": "c3bea819b4c56c5fe9582a5eff571c55202f7c0320c1acfa0e95dd62b97cb8cc"
+  },
+  "order-idna-before-host-policy": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "INVALID_REQUEST",
+    "message": "Invalid request.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 400,
+   "wire_sha256": "d26297229667573483f7b127d583711e857563109dc0734bc3988c2c7afa1002"
+  },
+  "order-idna-before-scheme": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "INVALID_REQUEST",
+    "message": "Invalid request.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 400,
+   "wire_sha256": "a00094d7095f0a7ea9ed70d930b22b5742564f91107ef35fd4a57884dd65154c"
+  },
+  "order-idna-before-userinfo": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "INVALID_REQUEST",
+    "message": "Invalid request.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 400,
+   "wire_sha256": "d5cf33ac5926bca4697375dd5705cc39cdc4d1fde17fed3d768484be34a4e25c"
+  },
+  "order-lone-percent-before-scheme": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "INVALID_REQUEST",
+    "message": "Invalid request.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 400,
+   "wire_sha256": "93809b6845ec09295379d9cc73c1b6f81b7c419d760dedcbc74da7e58064b566"
+  },
+  "order-parse-before-scheme": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "INVALID_REQUEST",
+    "message": "Invalid request.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 400,
+   "wire_sha256": "a7d53afd01a5b8e5b267acea3dfbcc667bdd1e19ba9afd4d5b108f782960157a"
+  },
+  "order-schema-before-destination": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "INVALID_REQUEST",
+    "message": "Invalid request.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 400,
+   "wire_sha256": "fc10a87488c637db96206a1ed64f21d753fbc63c607fb15fade5f543d333eb73"
+  },
+  "order-scheme-before-fragment": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "URL_SCHEME_BLOCKED",
+    "message": "URL scheme is blocked.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 422,
+   "wire_sha256": "3a3820d50e10b8f22addc70c046e05b21bbedf970f6b71deb780b72b0b189f7d"
+  },
+  "order-scheme-before-host": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "URL_SCHEME_BLOCKED",
+    "message": "URL scheme is blocked.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 422,
+   "wire_sha256": "38b8dd4119b32d009d419a2d14d0eacadfd6442c7f8d8455361c406c00024e8a"
+  },
+  "order-scheme-before-userinfo": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "URL_SCHEME_BLOCKED",
+    "message": "URL scheme is blocked.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 422,
+   "wire_sha256": "61c7bad44474bdf3b5f8020054d4d63fac9569ef7236d9b92a0fff80d3698fb9"
+  },
+  "order-size-before-version": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "REQUEST_TOO_LARGE",
+    "message": "Request body too large.",
+    "request_id": null,
+    "status": "failed"
+   },
+   "http_status": 413,
+   "wire_sha256": "b17b9871edafd7cb964cb1990c3b1672de3d49a2951965eb308219fd26015a9f"
+  },
+  "order-userinfo-before-host": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "INVALID_REQUEST",
+    "message": "Invalid request.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 400,
+   "wire_sha256": "2e515790bd9272cda3df5414e36886e7de7a47e3b79763cc3483ece53389c55a"
+  },
+  "order-version-before-destination": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "UNSUPPORTED_CONTRACT_VERSION",
+    "message": "Unsupported contract version.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 400,
+   "wire_sha256": "30edea856813d2cf4500b8e1bf8cbc154f5c0e97603e958608ec7c73cb147597"
+  },
+  "order-version-before-schema": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "LEGACY_DISABLED",
+    "message": "Legacy bridge protocol is disabled.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 400,
+   "wire_sha256": "a8de490b6082861fe7e8932a5d62b1229eb8698bf66a137879f6b439eeb071a1"
+  },
+  "parse-backslashes": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "CAPABILITY_UNAVAILABLE",
+    "message": "Browser interception is unavailable.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 503,
+   "wire_sha256": "ff292bca275b1c393b79eade50b001813b78ce68c42525f69b682c2ec1327ba6"
+  },
+  "parse-bad-ipv6": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "INVALID_REQUEST",
+    "message": "Invalid request.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 400,
+   "wire_sha256": "b4db9528ea076d2bdf33b3b5c4548f9191a5d2248cfae169a499976eb939fb07"
+  },
+  "parse-default-port": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "CAPABILITY_UNAVAILABLE",
+    "message": "Browser interception is unavailable.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 503,
+   "wire_sha256": "2f4e2bc2d321c1822b62ef81cc5e707b16b6a1af3b32ad0a6de9d4c4a4353a41"
+  },
+  "parse-empty-host": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "INVALID_REQUEST",
+    "message": "Invalid request.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 400,
+   "wire_sha256": "368f99503d92d64948bf61720678c27f3a1160e88eb7aa30e9caa5c10f4bd13b"
+  },
+  "parse-host-ends-in-bad-number": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "INVALID_REQUEST",
+    "message": "Invalid request.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 400,
+   "wire_sha256": "6c476be88c1d761950bd3d319d146d6f52f523785d2a6d496378a570f9dd2708"
+  },
+  "parse-host-forbidden-code-point": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "INVALID_REQUEST",
+    "message": "Invalid request.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 400,
+   "wire_sha256": "ade2c293cae46cc279024c3b3c59d92683bfaefa854947f231684161674ed0c0"
+  },
+  "parse-no-scheme": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "INVALID_REQUEST",
+    "message": "Invalid request.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 400,
+   "wire_sha256": "0b700ee677a99fb2fd5ead86746083b7c74d4d4894ce3326476b380612234c2a"
+  },
+  "parse-other-port": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "CAPABILITY_UNAVAILABLE",
+    "message": "Browser interception is unavailable.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 503,
+   "wire_sha256": "c3dcc50e34e661310f3c82c6000709514b9010a2497447c3c018b9ce9d978870"
+  },
+  "parse-percent-decoded-invalid-utf8": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "INVALID_REQUEST",
+    "message": "Invalid request.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 400,
+   "wire_sha256": "9d85c240cd8916078f57bc00a35d8eb67759fc3bfa55609d72c6fe3310d9e7f1"
+  },
+  "parse-percent-decoded-nul": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "INVALID_REQUEST",
+    "message": "Invalid request.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 400,
+   "wire_sha256": "5a52ce133f99766fcd13f4afe84f26f06e18811dc7feb1ae2586b991c37c1aba"
+  },
+  "parse-percent-encoded-ascii-host": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "CAPABILITY_UNAVAILABLE",
+    "message": "Browser interception is unavailable.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 503,
+   "wire_sha256": "eb21fd9b1d4b9bac869edff16e0a140e0a0f0f2c842724cb352fccac5989a2ff"
+  },
+  "parse-port-non-digit": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "INVALID_REQUEST",
+    "message": "Invalid request.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 400,
+   "wire_sha256": "779aba26fcbeceb464acfe75cbc219684c1b5398775fff43176f7ad285f10644"
+  },
+  "parse-port-out-of-range": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "INVALID_REQUEST",
+    "message": "Invalid request.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 400,
+   "wire_sha256": "29e66f47c543d829faa3c1b652b7c17e1774c7f7a1037f6f41af0f5513cfc5e7"
+  },
+  "parse-special-without-slashes": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "CAPABILITY_UNAVAILABLE",
+    "message": "Browser interception is unavailable.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 503,
+   "wire_sha256": "5276b89b75f86fb54b81411783108671b98b47c87e74d274a3eaf3bf79262361"
+  },
+  "parse-uppercase-scheme-and-host": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "CAPABILITY_UNAVAILABLE",
+    "message": "Browser interception is unavailable.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 503,
+   "wire_sha256": "e295651c10098740d72f7c723f1a07d7ab4095c4a04d739fdb8f310451f59251"
+  },
+  "request-id-max": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "CAPABILITY_UNAVAILABLE",
+    "message": "Browser interception is unavailable.",
+    "request_id": "ffffffff-ffff-ffff-ffff-ffffffffffff",
+    "status": "failed"
+   },
+   "http_status": 503,
+   "wire_sha256": "61fa8d7331ad1a3c4b6359466f5c9c03045a8e6d75aadd47977b528cf81abf58"
+  },
+  "request-id-nil": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "CAPABILITY_UNAVAILABLE",
+    "message": "Browser interception is unavailable.",
+    "request_id": "00000000-0000-0000-0000-000000000000",
+    "status": "failed"
+   },
+   "http_status": 503,
+   "wire_sha256": "1e6c67d06a5df750f04ec2767a9b4d1954507dce06cf36ae87b399600b5190f5"
+  },
+  "request-id-uppercase": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "CAPABILITY_UNAVAILABLE",
+    "message": "Browser interception is unavailable.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 503,
+   "wire_sha256": "a810f09bbe2a86d5ac229111156d9af9bda4df536ed92b4043350b779fa52286"
+  },
+  "request-id-variant-c": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "INVALID_REQUEST",
+    "message": "Invalid request.",
+    "request_id": null,
+    "status": "failed"
+   },
+   "http_status": 400,
+   "wire_sha256": "089078ccd6144504999e50d5fe19795912118b08840d1262ff2208e3f021f6f3"
+  },
+  "request-id-version-9": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "INVALID_REQUEST",
+    "message": "Invalid request.",
+    "request_id": null,
+    "status": "failed"
+   },
+   "http_status": 400,
+   "wire_sha256": "5ff9b81ac2c934fe0d2af6bc700b308f8c8373445a8965598559b010410d81d5"
+  },
+  "scheme-file": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "URL_SCHEME_BLOCKED",
+    "message": "URL scheme is blocked.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 422,
+   "wire_sha256": "d56555e47bc46e546e3e2f8c6debf964a28518ba269026a0f79edff7c6b694f2"
+  },
+  "scheme-ftp": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "URL_SCHEME_BLOCKED",
+    "message": "URL scheme is blocked.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 422,
+   "wire_sha256": "4d8c46b33b08796c1e75fe75d7006f35243ef01e4d2d627e549d69e5eefae129"
+  },
+  "scheme-http": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "URL_SCHEME_BLOCKED",
+    "message": "URL scheme is blocked.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 422,
+   "wire_sha256": "01ce40391f6a04a0cdda0c11e173534b76cf1a5402e873d1bd1aead06d39c386"
+  },
+  "scheme-javascript": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "URL_SCHEME_BLOCKED",
+    "message": "URL scheme is blocked.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 422,
+   "wire_sha256": "197149ee40b10df4ddbd5e38232939cf6be74f98e4250a3c7f32e33e3c905393"
+  },
+  "scheme-ws": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "URL_SCHEME_BLOCKED",
+    "message": "URL scheme is blocked.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 422,
+   "wire_sha256": "0c576a07bd3f2c9f86820fde3cd9c06766b5b2c528a96a650dd5130a17a791e8"
+  },
+  "session-underscore-dot-dash": {
+   "body": {
+    "auth_state": "missing",
+    "contract_version": "2.0.0",
+    "error_code": "SESSION_UNKNOWN",
+    "message": "Unknown browser session.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 422,
+   "wire_sha256": "eb263b224749080ab4b3a0d316b888b5e0dc09b7e821f5bce2001d6b660f2416"
+  },
+  "session-uppercase": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "INVALID_REQUEST",
+    "message": "Invalid request.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 400,
+   "wire_sha256": "63b0a245d9ff9f10ae996d83bc4d5977919b996b14fa5126a86714511c867f6f"
+  },
+  "timeout-exponent-float": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "CAPABILITY_UNAVAILABLE",
+    "message": "Browser interception is unavailable.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 503,
+   "wire_sha256": "793dce4894c29bc95699b33052d405c6362a636c2c4a47647d22e916135526d3"
+  },
+  "timeout-huge-int": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "INVALID_REQUEST",
+    "message": "Invalid request.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 400,
+   "wire_sha256": "7fab67d07a71cba6fc5ffdfbeeed15670007f89d8210029379f4398c76f6078c"
+  },
+  "timeout-integral-float": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "CAPABILITY_UNAVAILABLE",
+    "message": "Browser interception is unavailable.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 503,
+   "wire_sha256": "fe7d1e2f51c6a2aee2ea1b742b44fe0e7386124bad482bd9c7214abd1195218e"
+  },
+  "userinfo-password": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "INVALID_REQUEST",
+    "message": "Invalid request.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 400,
+   "wire_sha256": "6a992d04cf12730f2cb88b6497f57351f4ed0e42a3e9c3413a64d0da50f2ac0c"
+  },
+  "userinfo-username": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "INVALID_REQUEST",
+    "message": "Invalid request.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 400,
+   "wire_sha256": "2934fd94cb312df0db831edbe65551040bead1cf6e764924d351658677693f0e"
+  },
+  "valid-percent-escape": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "CAPABILITY_UNAVAILABLE",
+    "message": "Browser interception is unavailable.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 503,
+   "wire_sha256": "856c39f8b4326d983e57d4e20fe495fb2b1a853aa70beb3b8231935900a8764a"
+  },
+  "version-four-part": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "UNSUPPORTED_CONTRACT_VERSION",
+    "message": "Unsupported contract version.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 400,
+   "wire_sha256": "a412cfa211a24c47c5d084e6b78f0a756ce85d8654c171f49dc99235b10a7ba0"
+  },
+  "version-future": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "UNSUPPORTED_CONTRACT_VERSION",
+    "message": "Unsupported contract version.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 400,
+   "wire_sha256": "d24e9872babbc9b56a89bce68f6a0d1e2a69e76565b515a81e4423defe1aea3e"
+  },
+  "version-legacy-three-part": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "LEGACY_DISABLED",
+    "message": "Legacy bridge protocol is disabled.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 400,
+   "wire_sha256": "5369d4385a82331240a0f9f9a25acb778eca5ee37aeae4be366147630c237fc9"
+  },
+  "version-legacy-trailing-newline": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "UNSUPPORTED_CONTRACT_VERSION",
+    "message": "Unsupported contract version.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 400,
+   "wire_sha256": "5669ac6d272e15f279c31330d7a71e8dbe4d12c84140321f6c17088c1a2cd8ca"
+  },
+  "version-legacy-two-part": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "LEGACY_DISABLED",
+    "message": "Legacy bridge protocol is disabled.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 400,
+   "wire_sha256": "b04d19c4f64c79fffc3532abec5eac8b03619ca564957057528db7b47e203a4f"
+  },
+  "version-one-part": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "UNSUPPORTED_CONTRACT_VERSION",
+    "message": "Unsupported contract version.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 400,
+   "wire_sha256": "a017de253b65f94ad0f0644186b4e8faa261c6c6bbd9f5c6f279696fe6da033d"
+  },
+  "version-padded": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "UNSUPPORTED_CONTRACT_VERSION",
+    "message": "Unsupported contract version.",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "status": "failed"
+   },
+   "http_status": 400,
+   "wire_sha256": "e56e3dd7643e43d95b5a8b199fd69936258d770f7661e0172ea02b4ec796c4c4"
+  },
+  "wire-infinity-timeout": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "INVALID_JSON",
+    "message": "Invalid JSON body.",
+    "request_id": null,
+    "status": "failed"
+   },
+   "http_status": 400,
+   "wire_sha256": "f7923760c5e3a4f89288e318c40cb481bbf3e316844b4216f253b8f7d4e2cc3c"
+  },
+  "wire-lone-surrogate-before-version": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "INVALID_JSON",
+    "message": "Invalid JSON body.",
+    "request_id": null,
+    "status": "failed"
+   },
+   "http_status": 400,
+   "wire_sha256": "42fabcee8a4461cc88c48eb493518a94134858ed26c2a311b69e087a0dac7ce8"
+  },
+  "wire-lone-surrogate-doi": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "INVALID_JSON",
+    "message": "Invalid JSON body.",
+    "request_id": null,
+    "status": "failed"
+   },
+   "http_status": 400,
+   "wire_sha256": "89206b16ba381fa3e366379101ed24c45f021a2d342b708a73938d73cdf8ddf5"
+  },
+  "wire-lone-surrogate-too-large": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "REQUEST_TOO_LARGE",
+    "message": "Request body too large.",
+    "request_id": null,
+    "status": "failed"
+   },
+   "http_status": 413,
+   "wire_sha256": "0b5f4dcab3953b00ea86bb9ac320d4023527a60339471b4528729d6bb4c5f641"
+  },
+  "wire-nan-timeout": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "INVALID_JSON",
+    "message": "Invalid JSON body.",
+    "request_id": null,
+    "status": "failed"
+   },
+   "http_status": 400,
+   "wire_sha256": "f4a8bccaf1b278a670208b6590fe4773dff0e92431a77f2e58f5abc05db35c29"
+  },
+  "wire-negative-infinity-timeout": {
+   "body": {
+    "auth_state": "unchecked",
+    "contract_version": "2.0.0",
+    "error_code": "INVALID_JSON",
+    "message": "Invalid JSON body.",
+    "request_id": null,
+    "status": "failed"
+   },
+   "http_status": 400,
+   "wire_sha256": "fb8f4389750e6844899d6d126d1d12c7a966de594315bc56ab8a28c77abe9fba"
+  }
+ },
+ "schema": "bridge-server-oracle/1",
+ "server": {
+  "file_sha256": {
+   "bridge-server.ts": "670de7ef9fab728a698c1e139d885ca41d69f7c97d5391a6ca646172b518e36a",
+   "bridge-v2-contract.ts": "6fc8908eb4c140f35086e62908a11a52d1e5ba09a112eabfa30856c5dc97b091",
+   "bridge-v2-policy.ts": "02b971402be0a5e880a8f6b08a12ba589bbd74113ca6245d7d0d77477f54e730"
+  },
+  "lib": "packages/opencode-deep-research/lib",
+  "repo_head": "445bc00af1d5c75995a7d30e0d6ba69ea9d6c583",
+  "runtime": "bun 1.3.5"
+ },
+ "tokens": {
+  "bom": {
+   "raw_sha256": "2c1e7d11d6baf20dc69424d0cc3bc7c7b686bade10896ba6a8574541fc2425d8",
+   "server": "OracleToken_0123456789abcdefghijklmnopqrstuvwxyz"
+  },
+  "dot": {
+   "raw_sha256": "293feb8d4678f4dc4658e36981bccc7b66b4edba7c5b6a7e572d724711518970",
+   "server": null
+  },
+  "empty": {
+   "raw_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "server": null
+  },
+  "exact": {
+   "raw_sha256": "81e2fe8dfa643e92461deb3a5a5f1c627bddb433ca8398cc7c63d1ef83784c6a",
+   "server": "OracleToken_0123456789abcdefghijklmnopqrstuvwxyz"
+  },
+  "ideographic-space": {
+   "raw_sha256": "aa0b9c8af5d51e6b6cc85c7a149d879617758df64d147b9a52724e981a0af471",
+   "server": "OracleToken_0123456789abcdefghijklmnopqrstuvwxyz"
+  },
+  "inner-space": {
+   "raw_sha256": "e42833c992511fb7e16a0c66597bd9379f1bac95cecf5228c642326f761131b6",
+   "server": null
+  },
+  "inner-tab": {
+   "raw_sha256": "638e7d4fc0a8c058fc657250de5a0a84be89574b2288d76f774caee8717c3e0d",
+   "server": null
+  },
+  "leading-cr": {
+   "raw_sha256": "52521c59c7106a7e3e10cda45b4aea92a439cfc1d30cbd7682bfb22d09c86355",
+   "server": null
+  },
+  "leading-space": {
+   "raw_sha256": "d8a1617322e59f83a28b6aa09b57a9fbabf5691fb89e70b9d5745b705600e01b",
+   "server": "OracleToken_0123456789abcdefghijklmnopqrstuvwxyz"
+  },
+  "line-separator": {
+   "raw_sha256": "f8ab71bf5b5a0e993c6cdf19d61caafd75b4463184775c8699aa30619addf393",
+   "server": "OracleToken_0123456789abcdefghijklmnopqrstuvwxyz"
+  },
+  "max-256": {
+   "raw_sha256": "69783923010e99687c31035cf20f1394ea6bb6047396b2fae9ea600f085c33eb",
+   "server": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "min-32": {
+   "raw_sha256": "3ba3f5f43b92602683c19aee62a20342b084dd5971ddd33808d81a328879a547",
+   "server": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "nbsp": {
+   "raw_sha256": "5caf639508e25181eae67d6fe0ad595bc0c6c0a3098d9222a697ef0590e8efcc",
+   "server": "OracleToken_0123456789abcdefghijklmnopqrstuvwxyz"
+  },
+  "next-line-not-trimmed": {
+   "raw_sha256": "088eca9ac9690e7d6e185cfc4716be8b10aeb70ffc3b833a1363c621cc39e10f",
+   "server": null
+  },
+  "non-ascii-letter": {
+   "raw_sha256": "5175c7114ba97e470014a622db4f22199c70184d91ee5118544d246b3f50de92",
+   "server": null
+  },
+  "only-spaces": {
+   "raw_sha256": "1a0f564ddc6039457b2fb26b3d6a316c15eba20a886449847c3210c35821a693",
+   "server": null
+  },
+  "surrounding-tabs": {
+   "raw_sha256": "d998a5cbe150edbf69f7895ac14bb9fadf0d4171acdeede5544183872b5d2854",
+   "server": "OracleToken_0123456789abcdefghijklmnopqrstuvwxyz"
+  },
+  "too-long-257": {
+   "raw_sha256": "cd9c5059c6de0a0e2f1781b2c902b4155ccf8b81c18bc68f3553d5a9be38f1c2",
+   "server": null
+  },
+  "too-short-31": {
+   "raw_sha256": "61c60b487d1a921e0bcc9bf853dda0fb159b30bf57b2e2d2c753b00be15b5a09",
+   "server": null
+  },
+  "trailing-crlf": {
+   "raw_sha256": "e12c913c9ba8727a5b5268759ddfb1f43b58c2980c637d7502126901e4fa7b38",
+   "server": null
+  },
+  "trailing-lf": {
+   "raw_sha256": "0d94ca01c31a9649e84a5dad0d0484a1d0f46b9724e5e9e7d4501a32e9181047",
+   "server": null
+  },
+  "trailing-space": {
+   "raw_sha256": "ab7eedf57543fc885b2ff9aca451c74ee740a98cd09b5d57b8f2a721124881c4",
+   "server": "OracleToken_0123456789abcdefghijklmnopqrstuvwxyz"
+  },
+  "trim-to-256": {
+   "raw_sha256": "0b75ac33bee08aaa010ba1772eaf360fc8a6a2d0a3c64c4760416f690e1ccd6a",
+   "server": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "trim-to-31": {
+   "raw_sha256": "a26fef0b8e24de9c838932d2573e61d931852f436f21e694a2cd58b0e2027f99",
+   "server": null
+  },
+  "unit-separator-not-trimmed": {
+   "raw_sha256": "dc803f95fd7db9b51c3ede9f367dcc40024de548b1de08690312509c6bb39a95",
+   "server": null
+  },
+  "vertical-tab-form-feed": {
+   "raw_sha256": "6efcf815142ca2218adcb73b089688b1b5b8d21a6ed377b6a9bd0dd054b5541f",
+   "server": "OracleToken_0123456789abcdefghijklmnopqrstuvwxyz"
+  },
+  "zero-width-space-not-trimmed": {
+   "raw_sha256": "69ae9ec6825a4678a52e627dd54e74d0d6971fec51bb39a8b7c6aab891462101",
+   "server": null
+  }
+ }
+}

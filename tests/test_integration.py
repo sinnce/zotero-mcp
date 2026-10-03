@@ -21,6 +21,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from zotero_mcp.acquisition.bridge_client import BridgeHealthResult
+
+READY_HEALTH = BridgeHealthResult(True, "http://127.0.0.1:9870", "ready", "Bridge is ready.")
+
 
 @pytest.fixture(scope="module")
 def zotero_write_client():
@@ -272,8 +276,7 @@ def test_4_new_tools_registered():
 
 
 @pytest.mark.asyncio
-async def test_bridge_institutional():
-    from zotero_mcp.acquisition.bridge_client import BridgeDownloadResult
+async def test_bridge_institutional(bridge_artifact, tmp_path, monkeypatch):
     from zotero_mcp.acquisition.types import AccessLocation, AccessResolution
     from zotero_mcp.tools.acquire_paper import acquire_paper
 
@@ -289,23 +292,29 @@ async def test_bridge_institutional():
         locations=[loc],
         best_location=loc,
     )
-    bridge_result = BridgeDownloadResult(
-        status="complete",
-        auth_state="ready",
-        file_path="/tmp/test.pdf",
-    )
+    bridge_result = bridge_artifact("test.pdf")
+    staged_bytes = Path(bridge_result.file_path).read_bytes()
+    caller_root = tmp_path / "caller"
+    caller_root.mkdir()
+    monkeypatch.setattr("tempfile.tempdir", str(caller_root))
 
     with (
         patch("zotero_mcp.tools.acquire_paper.resolve_access", new=AsyncMock(return_value=resolution)),
         patch("zotero_mcp.tools.acquire_paper.BridgeClient") as MockBridgeClient,
     ):
         mock_bridge = MagicMock()
-        mock_bridge.is_available.return_value = True
-        mock_bridge.download.return_value = bridge_result
+        mock_bridge.configured = True
+        mock_bridge.health = AsyncMock(return_value=READY_HEALTH)
+        mock_bridge.download = AsyncMock(return_value=bridge_result)
         MockBridgeClient.return_value = mock_bridge
 
         result = await acquire_paper("10.xxx/institutional-only", session_name="libproxy-snu")
 
     assert result["status"] == "complete"
-    assert result["file_path"] == "/tmp/test.pdf"
+    # Without auto-ingest the caller receives its own verified copy, never the
+    # bridge-owned staged path.
+    assert result["file_path"] != bridge_result.file_path
+    assert Path(result["file_path"]).is_relative_to(caller_root)
+    assert Path(result["file_path"]).name == "test.pdf"
+    assert Path(result["file_path"]).read_bytes() == staged_bytes
     assert result["provenance"]["bridge_session"] == "libproxy-snu"

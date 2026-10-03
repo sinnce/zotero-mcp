@@ -1,6 +1,11 @@
 """Shared test fixtures for Zotero MCP tests."""
 
+import hashlib
+import tempfile
+
 import pytest
+
+from zotero_mcp.acquisition.bridge_client import BridgeDownloadResult
 
 
 class DummyContext:
@@ -80,20 +85,24 @@ class FakeZotero:
             "extra": "",
         }
         if item_type in ("journalArticle", "preprint"):
-            base.update({
-                "publicationTitle": "",
-                "volume": "",
-                "issue": "",
-                "pages": "",
-                "ISSN": "",
-            })
+            base.update(
+                {
+                    "publicationTitle": "",
+                    "volume": "",
+                    "issue": "",
+                    "pages": "",
+                    "ISSN": "",
+                }
+            )
         if item_type == "book":
-            base.update({
-                "publisher": "",
-                "place": "",
-                "ISBN": "",
-                "numPages": "",
-            })
+            base.update(
+                {
+                    "publisher": "",
+                    "place": "",
+                    "ISBN": "",
+                    "numPages": "",
+                }
+            )
         return base
 
     def addto_collection(self, collection_key, items, **kwargs):
@@ -108,8 +117,7 @@ class FakeZotero:
         return method
 
     def collection_items(self, key, **kwargs):
-        return [it for it in self._items
-                if key in it.get("data", {}).get("collections", [])]
+        return [it for it in self._items if key in it.get("data", {}).get("collections", [])]
 
     def file(self, key, **kwargs):
         return b""
@@ -118,6 +126,7 @@ class FakeZotero:
         """Create a dummy file so code that checks os.path.exists passes."""
         if path and filename:
             import os
+
             filepath = os.path.join(path, filename)
             with open(filepath, "wb") as f:
                 f.write(b"%PDF-1.4 fake")
@@ -144,6 +153,49 @@ def dummy_ctx():
     return DummyContext()
 
 
+# Whether the bridge is configured decides the acquisition channel, so no
+# test may inherit bridge settings from the developer environment.
+_BRIDGE_ENV_VARS = (
+    "BRIDGE_SERVER_URL",
+    "ZOTERO_BRIDGE_TOKEN",
+    "BRIDGE_AUTH_TOKEN",
+    "BRIDGE_TOKEN",
+    "BRIDGE_ALLOWED_DOMAINS",
+)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_bridge_env(monkeypatch):
+    for name in _BRIDGE_ENV_VARS:
+        monkeypatch.delenv(name, raising=False)
+
+
 @pytest.fixture
 def fake_zot():
     return FakeZotero()
+
+
+@pytest.fixture
+def bridge_artifact(tmp_path, monkeypatch):
+    """Stage a real file and return a complete bridge result that declares it.
+
+    Verified copies handed to the caller land in a per-test temp root rather
+    than the system temp directory.
+    """
+    caller_tmp = tmp_path / "caller-tmp"
+    caller_tmp.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(caller_tmp))
+
+    def _make(name="paper.pdf", content=b"%PDF-1.7 staged bridge artifact\n"):
+        path = tmp_path / name
+        path.write_bytes(content)
+        return BridgeDownloadResult(
+            status="complete",
+            auth_state="ready",
+            file_path=str(path),
+            sha256=hashlib.sha256(content).hexdigest(),
+            size_bytes=len(content),
+            content_type="application/pdf",
+        )
+
+    return _make

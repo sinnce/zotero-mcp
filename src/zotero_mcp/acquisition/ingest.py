@@ -1,8 +1,10 @@
 """Ingest orchestration — create Zotero item + optional attachment."""
 
 from __future__ import annotations
+
 import logging
 from pathlib import Path
+
 from .types import IngestResult, PipelineError, ProvenanceMetadata
 
 logger = logging.getLogger(__name__)
@@ -38,7 +40,7 @@ def ingest_paper(
     title: str,
     doi: str | None = None,
     arxiv_id: str | None = None,
-    authors: str | None = None,
+    authors: str | list[str] | None = None,
     journal: str | None = None,
     year: str | None = None,
     abstract: str | None = None,
@@ -49,6 +51,8 @@ def ingest_paper(
         provenance = ProvenanceMetadata()
 
     existing_key = _check_duplicate(read_zot, doi, arxiv_id, title)
+    if existing_key is None and write_zot is not read_zot:
+        existing_key = _check_duplicate(write_zot, doi, arxiv_id, title)
     if existing_key:
         return IngestResult(
             item_key=existing_key,
@@ -70,7 +74,12 @@ def ingest_paper(
     if abstract:
         template["abstractNote"] = abstract
     if authors:
-        template["creators"] = [{"creatorType": "author", "name": a.strip()} for a in authors.split(",") if a.strip()]
+        author_names = authors.split(",") if isinstance(authors, str) else authors
+        template["creators"] = [
+            {"creatorType": "author", "name": author_name.strip()}
+            for author_name in author_names
+            if author_name.strip()
+        ]
 
     prov_lines = ["[Paper Ingest Provenance]"]
     for field in [

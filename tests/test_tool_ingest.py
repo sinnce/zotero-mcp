@@ -1,7 +1,10 @@
-import pytest
 from unittest.mock import MagicMock, patch
+
+import pytest
+
+from zotero_mcp.acquisition.ingest import ingest_paper
+from zotero_mcp.acquisition.types import IngestResult
 from zotero_mcp.tools.ingest_paper_to_zotero import ingest_paper_to_zotero
-from zotero_mcp.acquisition.types import IngestResult, PipelineError, ProvenanceMetadata
 
 
 @pytest.fixture
@@ -37,6 +40,106 @@ def make_mock_zotero(item_key="TEST_KEY_123", has_duplicate=False):
 
 
 class TestIngestPaperToZotero:
+    @pytest.mark.parametrize(
+        ("ingest_kwargs", "existing_data"),
+        [
+            (
+                {"doi": "10.1234/existing"},
+                {"DOI": "10.1234/existing", "key": "EXISTING_DOI_KEY"},
+            ),
+            (
+                {"arxiv_id": "2401.12345"},
+                {"extra": "arXiv:2401.12345", "key": "EXISTING_ARXIV_KEY"},
+            ),
+        ],
+        ids=["doi", "arxiv"],
+    )
+    def test_uses_write_client_when_read_client_is_unavailable_for_duplicates(self, ingest_kwargs, existing_data):
+        read_zot = make_mock_zotero()
+        write_zot = make_mock_zotero()
+        read_zot.items.side_effect = ConnectionRefusedError("connection refused")
+        write_zot.items.return_value = [{"data": existing_data}]
+
+        result = ingest_paper(
+            write_zot=write_zot,
+            read_zot=read_zot,
+            title="Existing Paper",
+            **ingest_kwargs,
+        )
+
+        assert isinstance(result, IngestResult)
+        assert result.item_key == existing_data["key"]
+        write_zot.create_items.assert_not_called()
+        write_zot.attachment_both.assert_not_called()
+
+    def test_does_not_repeat_duplicate_query_for_shared_client(self):
+        zot = make_mock_zotero()
+
+        result = ingest_paper(
+            write_zot=zot,
+            read_zot=zot,
+            title="New Paper",
+            doi="10.1234/new",
+        )
+
+        assert isinstance(result, IngestResult)
+        assert zot.items.call_count == 1
+        zot.create_items.assert_called_once()
+
+    def test_creates_item_when_both_duplicate_clients_are_unavailable(self):
+        read_zot = make_mock_zotero()
+        write_zot = make_mock_zotero()
+        read_zot.items.side_effect = ConnectionRefusedError("connection refused")
+        write_zot.items.side_effect = ConnectionRefusedError("connection refused")
+
+        result = ingest_paper(
+            write_zot=write_zot,
+            read_zot=read_zot,
+            title="New Paper",
+            doi="10.1234/new",
+        )
+
+        assert isinstance(result, IngestResult)
+        assert read_zot.items.call_count == 1
+        assert write_zot.items.call_count == 1
+        write_zot.create_items.assert_called_once()
+
+    @pytest.mark.parametrize(
+        ("authors", "expected_creators"),
+        [
+            (
+                [" Ada Lovelace ", "", "Grace Hopper"],
+                [
+                    {"creatorType": "author", "name": "Ada Lovelace"},
+                    {"creatorType": "author", "name": "Grace Hopper"},
+                ],
+            ),
+            (
+                " Ada Lovelace, , Grace Hopper ",
+                [
+                    {"creatorType": "author", "name": "Ada Lovelace"},
+                    {"creatorType": "author", "name": "Grace Hopper"},
+                ],
+            ),
+        ],
+        ids=["resolver_author_list", "manual_author_string"],
+    )
+    def test_normalizes_author_names_at_ingest_boundary(self, authors, expected_creators):
+        # Given: canonical resolver or manual-tool author metadata.
+        mock_zot = make_mock_zotero()
+
+        # When: the metadata is ingested.
+        result = ingest_paper(
+            write_zot=mock_zot,
+            read_zot=mock_zot,
+            title="Test Paper",
+            authors=authors,
+        )
+
+        # Then: Zotero receives ordered non-empty creator names.
+        assert isinstance(result, IngestResult)
+        assert mock_zot.create_items.call_args[0][0][0]["creators"] == expected_creators
+
     def test_no_write_client_returns_error(self, mock_ctx):
         with patch(
             "zotero_mcp.tools.ingest_paper_to_zotero._get_write_client", side_effect=ValueError("No web client")

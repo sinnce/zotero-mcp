@@ -1,10 +1,15 @@
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
-from pathlib import Path
-from unittest.mock import AsyncMock, patch, MagicMock
+
+from zotero_mcp.acquisition.bridge_client import BRIDGE_UNREACHABLE, BridgeHealthResult
+from zotero_mcp.acquisition.types import AccessLocation, AccessResolution, ArtifactDownload, PipelineError
 from zotero_mcp.tools.download_paper_artifact import download_paper_artifact
-from zotero_mcp.acquisition.types import ArtifactDownload, PipelineError, ProvenanceMetadata
-from zotero_mcp.acquisition.bridge_client import BridgeClient, BridgeDownloadRequest, BridgeDownloadResult
-from zotero_mcp.acquisition.types import AccessResolution, AccessLocation
+
+READY_HEALTH = BridgeHealthResult(True, "http://127.0.0.1:9870", "ready", "Bridge is ready.")
+UNREACHABLE_HEALTH = BridgeHealthResult(
+    False, "http://127.0.0.1:9870", "unreachable", "Bridge is unreachable.", error_code=BRIDGE_UNREACHABLE
+)
 
 
 @pytest.fixture
@@ -88,21 +93,18 @@ class TestBridgeFallback:
             best_location=loc,
         )
 
-    async def test_bridge_fallback_triggered(self, tmp_path):
+    async def test_bridge_fallback_triggered(self, bridge_artifact):
         resolution = self._make_resolution(requires_session=True)
-        bridge_result = BridgeDownloadResult(
-            status="complete",
-            auth_state="ready",
-            file_path=str(tmp_path / "paper.pdf"),
-        )
+        bridge_result = bridge_artifact("paper.pdf")
 
         with (
             patch("zotero_mcp.tools.acquire_paper.resolve_access", new=AsyncMock(return_value=resolution)),
             patch("zotero_mcp.tools.acquire_paper.BridgeClient") as MockBridge,
         ):
             mock_instance = MagicMock()
-            mock_instance.is_available.return_value = True
-            mock_instance.download.return_value = bridge_result
+            mock_instance.configured = True
+            mock_instance.health = AsyncMock(return_value=READY_HEALTH)
+            mock_instance.download = AsyncMock(return_value=bridge_result)
             MockBridge.return_value = mock_instance
 
             from zotero_mcp.tools.acquire_paper import acquire_paper
@@ -112,18 +114,13 @@ class TestBridgeFallback:
         assert result["status"] == "complete"
         assert result["provenance"]["bridge_session"] == "libproxy-snu"
         assert result["provenance"]["access_source"] == "institutional"
-        mock_instance.download.assert_called_once()
+        mock_instance.download.assert_awaited_once()
         call_arg = mock_instance.download.call_args[0][0]
         assert call_arg.session_name == "libproxy-snu"
         assert call_arg.candidate_url == resolution.best_location.url
 
-    async def test_http_path_when_bridge_unavailable(self, tmp_path):
+    async def test_configured_unreachable_bridge_is_terminal(self):
         resolution = self._make_resolution(requires_session=True)
-        mock_artifact = ArtifactDownload(
-            file_path=tmp_path / "paper.pdf",
-            content_type="application/pdf",
-            size_bytes=1024,
-        )
 
         with (
             patch("zotero_mcp.tools.acquire_paper.resolve_access", new=AsyncMock(return_value=resolution)),
@@ -131,20 +128,19 @@ class TestBridgeFallback:
             patch("zotero_mcp.tools.acquire_paper.ArtifactDownloader") as MockDownloader,
         ):
             mock_bridge = MagicMock()
-            mock_bridge.is_available.return_value = False
+            mock_bridge.configured = True
+            mock_bridge.health = AsyncMock(return_value=UNREACHABLE_HEALTH)
+            mock_bridge.download = AsyncMock()
             MockBridge.return_value = mock_bridge
-
-            mock_dl = MagicMock()
-            mock_dl.download = AsyncMock(return_value=mock_artifact)
-            MockDownloader.return_value = mock_dl
 
             from zotero_mcp.tools.acquire_paper import acquire_paper
 
             result = await acquire_paper("10.1234/test", session_name="libproxy-snu")
 
-        assert result["status"] == "complete"
-        assert result["message"] == "Downloaded via HTTP"
-        mock_dl.download.assert_called_once()
+        assert result["status"] == "failed"
+        assert result["error_code"] == BRIDGE_UNREACHABLE
+        mock_bridge.download.assert_not_called()
+        MockDownloader.assert_not_called()
 
     async def test_http_path_unaffected(self, tmp_path):
         resolution = self._make_resolution(requires_session=False, url="https://arxiv.org/pdf/2301.00001.pdf")
@@ -160,6 +156,7 @@ class TestBridgeFallback:
             patch("zotero_mcp.tools.acquire_paper.ArtifactDownloader") as MockDownloader,
         ):
             mock_bridge = MagicMock()
+            mock_bridge.configured = False
             MockBridge.return_value = mock_bridge
 
             mock_dl = MagicMock()
@@ -172,5 +169,5 @@ class TestBridgeFallback:
 
         assert result["status"] == "complete"
         assert result["message"] == "Downloaded via HTTP"
-        mock_bridge.is_available.assert_not_called()
+        mock_bridge.health.assert_not_called()
         mock_dl.download.assert_called_once()
