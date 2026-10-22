@@ -23,6 +23,32 @@ from .chroma_client import GEMINI_DIRECT_ENDPOINT, ChromaClient, GeminiEmbedding
 
 MODEL = "gemini-embedding-2-preview"
 EXPECTED_COUNT = 3309
+PROFILES = {
+    "baseline-dense": {"mode": "dense"},
+    "dense-collapse": {"mode": "dense", "collapse": True},
+    "hybrid-rrf": {"mode": "hybrid", "weights": {"dense": 1.0, "lex": 1.0}},
+    "hybrid-weighted": {"mode": "hybrid", "weights": {"dense": 1.0, "lex": 0.5}},
+    "hybrid-gated": {"mode": "hybrid", "weights": {"dense": 1.0, "lex": 0.5}, "gate": True},
+    "hybrid-weighted-collapse": {"mode": "hybrid", "weights": {"dense": 1.0, "lex": 0.5}, "collapse": True},
+    "hybrid-gated-collapse": {"mode": "hybrid", "weights": {"dense": 1.0, "lex": 0.5}, "gate": True, "collapse": True},
+}
+
+
+def profile_config(profile, overrides=None):
+    config = dict(mode="dense", collapse=False, noise_policy="keep", k=60, gate=False,
+                  gate_threshold=0.8, gate_min_tokens=3, title_weight=3.0, weights={"dense": 1.0, "lex": 0.5})
+    config.update(json.loads(json.dumps(PROFILES[profile])))
+    for override in overrides or []:
+        key, value = override.split("=", 1)
+        target = config
+        parts = key.split(".")
+        for part in parts[:-1]:
+            target = target[part]
+        if parts[-1] not in target:
+            raise ValueError(f"Unknown retrieval override: {key}")
+        target[parts[-1]] = json.loads(value)
+    return config
+
 
 
 def text_key(text):
@@ -218,17 +244,29 @@ def eligible_ids(row, ids):
     return eligible.difference(row.get("exclude_ids", []))
 
 
-def run(snapshot, suite, cache, profile, output, k=100):
-    if profile != "baseline-dense" or not 1 <= k <= 100:
-        raise ValueError("Only baseline-dense and 1 <= k <= 100 are supported")
+def run(snapshot, suite, cache, profile, output, k=100, overrides=None, skip_missing=False, partition=None):
+    if profile not in PROFILES or not 1 <= k <= 100:
+        raise ValueError("Unknown profile or invalid k (must be 1..100)")
+    config = profile_config(profile, overrides)
     rows = read_suite(suite)
     store = QueryCache(cache)
-    for row in rows:
-        store.embed_query(row["text"])
+    if partition:
+        rows = [row for row in rows if row.get("partition") == partition]
+    missing = [row["query_id"] for row in rows if text_key(row["text"]) not in store.vectors]
+    if missing and not skip_missing:
+        store.embed_query(next(row["text"] for row in rows if row["query_id"] in missing))
+    rows = [row for row in rows if row["query_id"] not in set(missing)]
     snapshot, output = Path(snapshot).resolve(), Path(output).resolve()
     if output == snapshot or snapshot in output.parents:
         raise ValueError("Output must be outside the snapshot")
     output.mkdir(parents=True, exist_ok=False)
+    # A reduced suite preserves the scorer's exact query-coverage contract.
+    (output / "evaluated-suite.jsonl").write_text(
+        "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows)
+    )
+    manifest_path = Path(suite).with_name("suite.manifest.json")
+    if manifest_path.exists():
+        shutil.copyfile(manifest_path, output / "suite.manifest.json")
     source = snapshot / "chroma_db"
     before = hash_tree(snapshot)
     scratch = output / "scratch" / "chroma_db"
@@ -259,15 +297,19 @@ def run(snapshot, suite, cache, profile, output, k=100):
             if any((meta or {}).get("item_key") != key for key, meta in zip(ids, records["metadatas"], strict=True)):
                 raise ValueError("Snapshot item_key metadata does not match record IDs")
             search = ZoteroSemanticSearch(chroma_client=client, zotero_client=SnapshotZotero(records))
-            overlaps = []
+            search._retrieval_config = config
+            overlaps, latencies, diagnostics = [], [], []
             with (output / "rankings.jsonl").open("w") as stream:
                 for row in rows:
                     eligible = eligible_ids(row, ids)
                     filters = {"item_key": {"$in": sorted(eligible)}} if len(eligible) != len(ids) else None
+                    started = time.perf_counter()
                     result = search.search(row["text"], limit=k, filters=filters) if eligible else {"results": []}
+                    latencies.append(time.perf_counter() - started)
+                    diagnostics.append(result.get("retrieval", {}))
                     if result.get("error"):
                         raise RuntimeError(result["error"])
-                    ranking = [dict(item_key=r["item_key"], score=r["similarity_score"]) for r in result["results"]]
+                    ranking = [dict(item_key=r["item_key"], score=r.get("ranking_score", r["similarity_score"])) for r in result["results"]]
                     ranked_ids = [r["item_key"] for r in ranking]
                     if len(set(ranked_ids)) != len(ranked_ids) or not set(ranked_ids) <= eligible:
                         raise ValueError("Duplicate or ineligible retrieval results")
@@ -295,6 +337,8 @@ def run(snapshot, suite, cache, profile, output, k=100):
         dict(
             system=f"zmcp-{profile}",
             code_revision=revision,
+            implementation_sha256={name: hashlib.sha256((Path(__file__).parent / name).read_bytes()).hexdigest()
+                                   for name in ("retrieval.py", "retrieval_eval.py", "semantic_search.py", "chroma_client.py")},
             params=dict(
                 profile=profile,
                 k=k,
@@ -302,14 +346,22 @@ def run(snapshot, suite, cache, profile, output, k=100):
                 model=store.metadata["model"],
                 dimension=store.metadata["dimension"],
                 reranker=False,
+                retrieval=config,
+                partition=partition,
             ),
             snapshot_hashes=before,
             snapshot_hashes_after=after,
             suite_sha256=hashlib.sha256(Path(suite).read_bytes()).hexdigest(),
+            evaluated_suite_sha256=hashlib.sha256((output / "evaluated-suite.jsonl").read_bytes()).hexdigest(),
             cache_sha256=hashlib.sha256((Path(cache) / "query-vectors.npz").read_bytes()).hexdigest(),
             ann_vs_exact_overlap_at_10=float(np.mean(overlaps)) if overlaps else None,
             diagnostic_note="Cosine exact reference; production retains the collection metric. For k<10 overlap is depth-limited.",
             query_count=len(rows),
+            skipped_query_ids=missing,
+            skipped_query_count=len(missing),
+            latency_seconds=dict(mean=float(np.mean(latencies)) if latencies else None,
+                                 p95=float(np.percentile(latencies, 95)) if latencies else None),
+            retrieval_diagnostics=diagnostics,
             collection_count=len(ids),
         ),
     )
@@ -328,8 +380,11 @@ def main():
     runner = sub.add_parser("run")
     for name in ("snapshot", "suite", "cache", "output"):
         runner.add_argument(f"--{name}", required=True)
-    runner.add_argument("--profile", choices=["baseline-dense"], required=True)
+    runner.add_argument("--profile", choices=list(PROFILES), required=True)
     runner.add_argument("--k", type=int, default=100)
+    runner.add_argument("--set", dest="overrides", action="append", default=[])
+    runner.add_argument("--skip-missing", action="store_true")
+    runner.add_argument("--partition", choices=["dev", "test"])
     args = vars(parser.parse_args())
     command = args.pop("command")
     (embed_queries if command == "embed-queries" else run)(**args)
