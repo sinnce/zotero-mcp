@@ -25,7 +25,7 @@ from pyzotero import zotero
 
 from .chroma_client import ChromaClient, create_chroma_client
 from .client import get_zotero_client
-from .text_clean import CLEAN_VERSION, clean_embedded_text
+from .text_clean import CLEAN_VERSION, clean_source_text, finalize_embedded_text
 from .utils import format_creators, is_local_mode
 from .local_db import LocalZoteroReader, get_local_zotero_reader
 
@@ -202,6 +202,14 @@ class ZoteroSemanticSearch:
 
         # Format creators as text
         creators = data.get("creators", [])
+        if self.clean_text:
+            creators = [
+                clean_source_text(creator) if isinstance(creator, str) else {
+                    key: clean_source_text(value) if key in {"firstName", "lastName", "name"} else value
+                    for key, value in creator.items()
+                }
+                for creator in creators
+            ]
         creators_text = format_creators(creators)
 
         # Additional searchable content
@@ -213,8 +221,11 @@ class ZoteroSemanticSearch:
 
         # Tags
         if tags := data.get("tags"):
-            tag_text = " ".join([tag.get("tag", "") for tag in tags])
-            extra_fields.append(tag_text)
+            if self.clean_text:
+                extra_fields.extend(tag.get("tag", "") for tag in tags)
+            else:
+                tag_text = " ".join([tag.get("tag", "") for tag in tags])
+                extra_fields.append(tag_text)
 
         # Note content (if available)
         if note := data.get("note"):
@@ -227,6 +238,10 @@ class ZoteroSemanticSearch:
                 extra_fields.append(note_text)
 
         # Combine all text fields
+        if self.clean_text:
+            # Preserve field boundaries for HTML pairing, including individual tags.
+            title, abstract = clean_source_text(title), clean_source_text(abstract)
+            extra_fields = [clean_source_text(field) for field in extra_fields]
         text_parts = [title, creators_text, abstract] + extra_fields
         return " ".join(filter(None, text_parts))
 
@@ -939,14 +954,16 @@ class ZoteroSemanticSearch:
                 # Always include structured fields; append fulltext when available
                 fulltext = item.get("data", {}).get("fulltext", "")
                 structured_text = self._create_document_text(item)
+                if self.clean_text:
+                    fulltext = clean_source_text(fulltext)
                 if fulltext.strip():
                     doc_text = (structured_text + "\n\n" + fulltext) if structured_text.strip() else fulltext
                 else:
                     doc_text = structured_text
-                # Clean once across all fields, including fulltext and HTML-bearing
-                # structured fields, before either character or model token limits.
+                # Fields are already cleaned independently. Never parse their join
+                # as HTML: literal opening/closing tags can belong to different fields.
                 if self.clean_text:
-                    doc_text = clean_embedded_text(doc_text)
+                    doc_text = finalize_embedded_text(doc_text)
                 metadata = self._create_metadata(item)
 
                 if not doc_text.strip():

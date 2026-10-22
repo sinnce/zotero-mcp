@@ -5,10 +5,10 @@ scans either consume their input or stop at the next opener; no suffix is scanne
 repeatedly. Encoded markup and nested entities remain literal to keep the output
 stable under repeated entity decoding; ordinary entities decode after tag removal.
 
-clean_v2 revision (unreleased): bound generic chrome to banner context, remove
-only stamp-contributing lines, pair HTML locally, and require header regions.
+clean_v2 revision (unreleased): bound generic chrome to distinctive banners,
+protect code, pair HTML within source lines/fields, and require header regions.
 Classification uses source boundaries: re-cleaning collapsed text cannot recover
-those boundaries (for example, I\nUnderstand becomes a single banner-like line).
+those boundaries (for example, tags on separate lines become locally paired).
 """
 
 import html
@@ -21,13 +21,13 @@ _STAMP = re.compile(r"arxiv:\d{4}\.\d{4,5}(?:v\d+)?", re.I)
 _BANNER = re.compile(
     r"(?:change to arxiv['’]s privacy policy[.!]?|"
     r"the arxiv privacy policy has changed\b.*|"
-    r"i understand|skip to main content|open (?:search|navigation menu))", re.I,
+    r"skip to main content)", re.I,
 )
 _CHROME_RADIUS = 5
 _CHROME = re.compile(
     r"(?:"
     r"(?:we have updated|please review) (?:our |arxiv['’]s )privacy policy[.!]?|"
-    r"skip to yearly menu bar|"
+    r"i understand|skip to yearly menu bar|"
     r"open (?:search|navigation menu)|arxiv logo|cornell university|"
     r"main navigation|search|advanced search|help|about|donate|menu|"
     r"close (?:search|navigation menu))", re.I,
@@ -54,7 +54,8 @@ _TAG_NAMES = frozenset(
 )
 _VOID_TAGS = frozenset({"br", "img", "meta", "link", "hr"})
 _TAG_START = re.compile(r"<(/?)([a-z][a-z0-9]{0,5})(?=[\s/><]|$)", re.I)
-_PARAGRAPH_BREAK = re.compile(r"\r?\n[ \t\r]*\n|\f")
+_BACKTICKS = re.compile(r"`+")
+_FENCE = re.compile(r" {0,3}(`{3,}|~{3,})(.*)")
 _RAW_CLOSE = {name: re.compile(r"</" + name + r"\s*>", re.I) for name in ("script", "style")}
 _HTML_TOKEN = re.compile(r"[<>]|&(?:#[xX][0-9a-fA-F]{1,8}|#\d{1,10}|[a-zA-Z][a-zA-Z0-9]{0,31});")
 _ENTITY_TAIL = re.compile(r"(?:#[xX][0-9a-fA-F]{1,8}|#\d{1,10}|[a-zA-Z][a-zA-Z0-9]{0,31});")
@@ -94,8 +95,10 @@ def _chrome_only(line: str, *, in_block: bool = False) -> bool:
         visible = link[1].strip()
         if link[2].casefold().startswith("data:image"):
             return True
+        if re.fullmatch(r"arxiv(?: logo)?", visible, re.I):
+            return True
         if in_block and (
-            re.fullmatch(r"(?:arxiv(?: logo)?|(?:cornell university )?logo)", visible, re.I)
+            re.fullmatch(r"(?:cornell university )?logo", visible, re.I)
             or visible.casefold() == "privacy policy" and _PRIVACY_URL.fullmatch(link[2])
         ):
             return True
@@ -104,8 +107,9 @@ def _chrome_only(line: str, *, in_block: bool = False) -> bool:
     image = _IMAGE.fullmatch(visible)
     if image:
         return bool(
-            re.search(r"\b(?:logo|arxiv)\b", image[1], re.I)
+            re.fullmatch(r"arxiv(?: logo)?", image[1].strip(), re.I)
             or image[2].casefold().startswith("data:image")
+            or in_block and re.search(r"\blogo\b", image[1], re.I)
         )
     # A linked image is common on the arXiv page. Test the entire wrapper.
     if visible.startswith("[!"):
@@ -139,7 +143,7 @@ def drop_web_chrome_lines(text: str) -> str:
 
 
 def drop_running_headers(text: str) -> str:
-    """Require >=3 repetitions plus a page region or distinctive journal header.
+    """Require >=3 repetitions and a page region for every journal header.
 
     Only occurrences at a boundary are removed for ordinary header patterns.
     Blank paragraph breaks alone do not establish a page boundary.
@@ -167,14 +171,13 @@ def drop_running_headers(text: str) -> str:
     kept = []
     for i, (line, key) in enumerate(zip(lines, normalized)):
         region = i in regions
-        distinctive = re.match(r"research article\s*[|\u2003]", line.strip(), re.I)
-        if counts[key] >= 3 and (_HEADER.match(key) or _HEADER.match(line.strip())) and (region or distinctive):
+        if counts[key] >= 3 and (_HEADER.match(key) or _HEADER.match(line.strip())) and region:
             continue
         kept.append(line)
     return "\n".join(kept).rstrip("\n")
 
 
-def _strip_paragraph_tags(text: str) -> str:
+def _strip_line_tags(text: str) -> str:
     """Scan allowlisted tags once, respecting quoted attribute delimiters.
 
     An unclosed tag stops at another '<', so adversarial openers are linear.
@@ -209,19 +212,25 @@ def _strip_paragraph_tags(text: str) -> str:
                 break
             j += 1
         if j == len(text) or text[j] != ">":
-            tokens.append((i, j, None, False))
+            tokens.append((i, j, None, False, False))
             i = j
             continue
         name = start[2].casefold()
+        self_closing = text[j - 1] == "/"
         index = len(tokens)
-        tokens.append((i, j + 1, name, bool(start[1])))
+        tokens.append((i, j + 1, name, bool(start[1]), self_closing))
+        # A self-closing raw tag must never consume a later raw block's close.
+        if self_closing:
+            paired.add(index)
+            i = j + 1
+            continue
         if name in raw_closes and not start[1]:
             closing = next_close[name]
             while closing is not None and closing.start() < j + 1:
                 closing = next(raw_closes[name], None)
             next_close[name] = closing
             if closing is not None:
-                tokens.append((closing.start(), closing.end(), name, True))
+                tokens.append((closing.start(), closing.end(), name, True, False))
                 paired.update((index, index + 1))
                 i = closing.end()
                 continue
@@ -237,7 +246,7 @@ def _strip_paragraph_tags(text: str) -> str:
     out = []
     end = 0
     raw = None
-    for index, (a, b, name, closing) in enumerate(tokens):
+    for index, (a, b, name, closing, self_closing) in enumerate(tokens):
         if raw is not None:
             if name == raw and closing and index in paired:
                 out.append(" ")
@@ -249,7 +258,7 @@ def _strip_paragraph_tags(text: str) -> str:
             out.append("&lt;" + text[a + 1:b])
         elif index in paired:
             out.append(" ")
-            if name in {"script", "style"} and not closing:
+            if name in {"script", "style"} and not closing and not self_closing:
                 raw = name
         else:
             out.append(text[a:b])
@@ -258,11 +267,49 @@ def _strip_paragraph_tags(text: str) -> str:
     return "".join(out)
 
 
-def _strip_tags(text: str) -> str:
-    return "".join(
-        part if i % 2 else _strip_paragraph_tags(part)
-        for i, part in enumerate(re.split("(" + _PARAGRAPH_BREAK.pattern + ")", text))
-    )
+def _inline_code_parts(text: str):
+    """Yield literal/code chunks, pairing equal backtick runs in linear time."""
+    runs = list(_BACKTICKS.finditer(text))
+    following = [None] * len(runs)
+    by_length = {}
+    for i in range(len(runs) - 1, -1, -1):
+        size = runs[i].end() - runs[i].start()
+        following[i] = by_length.get(size)
+        by_length[size] = i
+    end = i = 0
+    while i < len(runs):
+        closing = following[i]
+        if closing is None:
+            i += 1
+            continue
+        yield False, text[end:runs[i].start()]
+        end = runs[closing].end()
+        yield True, text[runs[i].start():end]
+        i = closing + 1
+    yield False, text[end:]
+
+
+def _code_parts(text: str):
+    """Protect Markdown fences (including unclosed ones), then inline spans."""
+    fence = None
+    plain_start = fence_start = offset = 0
+    for line in text.splitlines(keepends=True):
+        match = _FENCE.fullmatch(line.rstrip("\r\n"))
+        if fence is None and match and (match[1][0] != "`" or "`" not in match[2]):
+            yield from _inline_code_parts(text[plain_start:offset])
+            fence = match[1]
+            fence_start = offset
+        elif fence is not None and match and (
+            match[1][0] == fence[0] and len(match[1]) >= len(fence) and not match[2].strip()
+        ):
+            yield True, text[fence_start:offset + len(line)]
+            fence = None
+            plain_start = offset + len(line)
+        offset += len(line)
+    if fence is not None:
+        yield True, text[fence_start:]
+    else:
+        yield from _inline_code_parts(text[plain_start:])
 
 
 def strip_html(text: str) -> str:
@@ -272,7 +319,12 @@ def strip_html(text: str) -> str:
     markup or another entity on the next pass. This conservative exception is
     necessary for idempotence without recursively decoding literal source text.
     """
-    return _decode_entities(_strip_tags(text))
+    return "".join(
+        part if protected else _decode_entities("".join(
+            _strip_line_tags(line) for line in part.splitlines(keepends=True)
+        ))
+        for protected, part in _code_parts(text)
+    )
 
 
 def _decode_entities(text: str) -> str:
@@ -303,12 +355,40 @@ def collapse_whitespace(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
-def clean_embedded_text(text: str) -> str:
-    """Apply clean_v2 before the character cap; trim after the cap too."""
-    text = drop_rotated_watermark_runs(text)
-    text = drop_web_chrome_lines(text)
-    text = drop_running_headers(text)
-    text = strip_html(text)
+def clean_source_text(text: str) -> str:
+    """Clean one source field without collapsing boundaries or applying limits."""
+    # Skip line classification for entire code-containing lines. Classifying
+    # fragments around inline code would turn prose into false chrome anchors.
+    protected_lines = set()
+    line_number = 0
+    for protected, part in _code_parts(text):
+        next_line = line_number + part.count("\n")
+        if protected:
+            protected_lines.update(range(line_number, next_line + (not part.endswith("\n"))))
+        line_number = next_line
+    lines = text.split("\n")
+    parts = []
+    start = 0
+    while start < len(lines):
+        protected = start in protected_lines
+        end = start + 1
+        while end < len(lines) and (end in protected_lines) == protected:
+            end += 1
+        part = "\n".join(lines[start:end]) + ("\n" if end < len(lines) else "")
+        if not protected:
+            part = drop_rotated_watermark_runs(part)
+            part = drop_web_chrome_lines(part)
+            # The header helper trims trailing newlines; keep a separator before
+            # a following protected chunk so adjacent words cannot concatenate.
+            separator = "\n" if part.endswith("\n") else ""
+            part = drop_running_headers(part) + separator
+        parts.append(part)
+        start = end
+    return strip_html("".join(parts))
+
+
+def finalize_embedded_text(text: str) -> str:
+    """Collapse/cap already-cleaned fields without pairing across their joins."""
     text = collapse_whitespace(text)
     if len(text) > 8000:
         # Cutting a literal <beta> to <b, or a protected &amp;lt; to &amp;,
@@ -324,3 +404,8 @@ def clean_embedded_text(text: str) -> str:
         # Do not reclassify literal tags after source paragraphs have collapsed.
         text = collapse_whitespace(_decode_entities(capped))[:8000].rstrip()
     return text
+
+
+def clean_embedded_text(text: str) -> str:
+    """Apply clean_v2 before the character cap; trim after the cap too."""
+    return finalize_embedded_text(clean_source_text(text))

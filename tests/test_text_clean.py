@@ -49,12 +49,11 @@ def test_watermark_keeps_blank_and_indented_noncontributing_lines():
 
 
 @pytest.mark.parametrize("chrome", [
-    "Change to arXiv's privacy policy", "I Understand", "Skip to main content",
+    "Change to arXiv's privacy policy", "Skip to main content",
     "The arXiv Privacy Policy has changed. Please review the new policy.",
     "![arxiv logo](https://example.invalid/logo)",
     "![other](data:image/png;base64,FAKE)", "[logo](data:image/png,FAKE)",
     "[![arxiv logo](logo.png)](https://arxiv.org)",
-    "open search", "open navigation menu",
     "The [arXiv Privacy Policy](https://info.arxiv.org/help/policies/privacy_policy.html) "
     "has changed. By continuing to use arxiv.org, you are agreeing to the privacy policy.",
 ])
@@ -68,12 +67,15 @@ def test_drop_web_chrome_lines(chrome):
     "Skip to yearly menu bar", "# [Cornell University](https://example.invalid/)",
     "[Logo](https://example.invalid/logo.svg)",
     "* [Privacy Policy](https://arxiv.org/help/policies/privacy_policy)",
+    "I Understand", "open search", "open navigation menu",
+    "![logo](logo.png)",
 ])
 def test_generic_chrome_needs_nearby_distinctive_banner(generic):
     assert drop_web_chrome_lines(generic) == generic
     assert clean_embedded_text(generic) == generic
-    assert drop_web_chrome_lines(f"{generic}\nI Understand\n{generic}") == ""
-    distant = "I Understand\n" + "Body\n" * 5 + generic
+    anchor = "Change to arXiv's privacy policy"
+    assert drop_web_chrome_lines(f"{generic}\n{anchor}\n{generic}") == ""
+    distant = anchor + "\n" + "Body\n" * 5 + generic
     assert drop_web_chrome_lines(distant) == "Body\n" * 5 + generic
 
 
@@ -81,7 +83,26 @@ def test_chrome_classification_uses_original_lines_only():
     assert clean_embedded_text("Please review\nour privacy policy.") == "Please review our privacy policy."
     assert clean_embedded_text("I\nUnderstand") == "I Understand"
     assert clean_embedded_text("Help <b></b>") == "Help"
-    assert drop_web_chrome_lines("![logo](logo.png)\nAbout\nHelp") == "About\nHelp"
+    text = "![logo](logo.png)\nAbout\nHelp"
+    assert drop_web_chrome_lines(text) == text
+
+
+def test_generic_chrome_cannot_anchor_other_generic_lines():
+    text = "I Understand\nHelp\nAbout\nopen search\nopen navigation menu"
+    assert drop_web_chrome_lines(text) == text
+    assert clean_embedded_text(text) == collapse_whitespace(text)
+
+
+@pytest.mark.parametrize("generic", ["I Understand", "open search", "open navigation menu", "About", "Help"])
+@pytest.mark.parametrize("direction", ["before", "after"])
+def test_generic_chrome_radius_is_exactly_five_lines(generic, direction):
+    anchor = "Skip to main content"
+    for distance in (5, 6):
+        lines = [anchor] + ["Body"] * (distance - 1) + [generic]
+        if direction == "before":
+            lines.reverse()
+        expected = [line for line in lines if line != anchor and (line != generic or distance > 5)]
+        assert drop_web_chrome_lines("\n".join(lines)) == "\n".join(expected)
 
 
 @pytest.mark.parametrize("text", [
@@ -92,6 +113,7 @@ def test_chrome_classification_uses_original_lines_only():
     "Before ![arxiv logo](logo.png) after",
     "A data:image link is described here.",
     "[Privacy Policy](https://example.invalid/research)",
+    "![arxiv diagram](diagram.png)",
 ])
 def test_chrome_substrings_preserve_prose_and_joined_fields(text):
     assert drop_web_chrome_lines(text) == text
@@ -131,14 +153,76 @@ def test_html_markup_elsewhere_does_not_consume_literal_tags(markup, literal):
     assert clean_embedded_text(literal + "\n" + markup) == literal + " Title"
 
 
-def test_html_pairing_is_local_to_paragraphs():
+def test_html_pairing_is_local_to_source_lines():
     assert strip_html("<span>literal\n\nother</span>") == "<span>literal\n\nother</span>"
     assert strip_html("<span>literal\r\n\r\nother</span>") == "<span>literal\r\n\r\nother</span>"
-    assert strip_html("<span>real\nmarkup</span>") == " real\nmarkup "
+    assert strip_html("<span>literal\nother</span>") == "<span>literal\nother</span>"
+    assert strip_html("<script>literal\nresult\n</script>") == "<script>literal\nresult\n</script>"
     assert strip_html("<unknown>literal</unknown>") == "<unknown>literal</unknown>"
     assert strip_html("A<hr>B<img src='x'>C") == "A B C"
     source = "<span>literal\n\nother</span> " + "x" * 9000
     assert clean_embedded_text(source) == ("<span>literal other</span> " + "x" * 9000)[:8000]
+
+
+@pytest.mark.parametrize("tag", ["script", "style"])
+@pytest.mark.parametrize("attributes", ["", ' src="math.js"', " data-x='1 > 0' "])
+@pytest.mark.parametrize("separator", ["\n", " "])
+def test_self_closing_raw_tags_never_suppress_body(tag, attributes, separator):
+    text = (
+        f"<{tag}{attributes}/>{separator}Main result: accuracy is 95%."
+        f"{separator}<{tag}>initialise()</{tag}>"
+    )
+    assert clean_embedded_text(text) == "Main result: accuracy is 95%."
+    assert clean_embedded_text(f"<{tag}/><b>Visible</b></{tag}>") == f"Visible </{tag}>"
+
+
+@pytest.mark.parametrize("text", [
+    "The tokens `<script>` and `</script>` delimit a script element.",
+    "The tokens `<style>` and `</style>` delimit a style element.",
+    "Use `<b>literal</b>` and `<span>literal</span>` here.",
+    "Use ``<script>`literal`</script>`` here.",
+    "`<img src='x'/> &amp; <br>`",
+    "Unmatched `<script> and </script>` then ` end.",
+])
+def test_backtick_spans_preserve_literal_markup(text):
+    assert strip_html(text) == text
+    assert clean_embedded_text(text) == text
+    assert strip_html("<b>Real</b> " + text) == " Real  " + text
+
+
+@pytest.mark.parametrize("fence", ["```", "````", "~~~"])
+@pytest.mark.parametrize("closed", [False, True])
+def test_fenced_code_preserves_markup(fence, closed):
+    code = f"{fence}html\n<script>\nhidden?\n</script>\n<b>literal</b> &amp; <br>\n"
+    if closed:
+        code += fence + "\n"
+    assert strip_html(code) == code
+    assert clean_embedded_text(code) == collapse_whitespace(code)
+    assert strip_html("<b>Real</b>\n" + code) == " Real \n" + code
+
+
+def test_chrome_looking_code_stays_literal():
+    code = "```html\nSkip to main content\n![image](data:image/png,FAKE)\n```"
+    assert clean_embedded_text(code) == collapse_whitespace(code)
+    inline = "Use `![image](data:image/png,FAKE)` literally."
+    assert clean_embedded_text(inline) == inline
+    assert clean_embedded_text("Prose\n```html\n<b>literal</b>\n```\nEnd") == (
+        "Prose ```html <b>literal</b> ``` End"
+    )
+
+
+@pytest.mark.parametrize("text", [
+    "The heading is `quoted`: Skip to main content",
+    "Skip to main content `is a literal label` in this discussion.",
+    "Change to arXiv's privacy policy `is a literal label` here.",
+])
+def test_inline_code_does_not_split_prose_into_chrome_lines(text):
+    assert clean_embedded_text(text) == text
+
+
+def test_tags_cannot_pair_across_protected_code():
+    text = "<script>literal `code` result</script>"
+    assert strip_html(text) == text
 
 
 def test_running_headers_require_pattern_and_three_repetitions():
@@ -146,12 +230,16 @@ def test_running_headers_require_pattern_and_three_repetitions():
     assert drop_running_headers(f"{header}\nBody\n research article  | SCIENCE\nEnd") == (
         f"{header}\nBody\n research article  | SCIENCE\nEnd"
     )
-    assert drop_running_headers(f"{header}\nBody\nresearch article | SCIENCE\n{header}") == "Body"
+    assert collapse_whitespace(drop_running_headers(
+        f"{header}\nBody\fresearch article | SCIENCE\nBody\f{header}"
+    )) == "Body Body"
     assert collapse_whitespace(drop_running_headers("OPEN ACCESS\nBody\fOpen Access\nBody\fOPEN ACCESS")) == "Body Body"
     assert collapse_whitespace(drop_running_headers(
         "PNAS | vol. 1\nBody\n<!-- page break -->\nPNAS | vol. 1\nBody\n<!-- page break -->\nPNAS | vol. 1"
     )) == "Body <!-- page break --> Body <!-- page break -->"
-    assert drop_running_headers("RESEARCH ARTICLE\u2003SCIENCE\n" * 3 + "Body") == "Body"
+    assert collapse_whitespace(drop_running_headers(
+        "RESEARCH ARTICLE\u2003SCIENCE\nBody\f" * 3
+    )) == "Body Body Body"
 
 
 @pytest.mark.parametrize("text", [
@@ -163,7 +251,10 @@ def test_preserve_body_headings_and_repeated_data(text):
     assert drop_running_headers(text) == text.rstrip("\n")
 
 
-@pytest.mark.parametrize("row", ["Science | 12", "Open Access", "PNAS | vol. 1"])
+@pytest.mark.parametrize("row", [
+    "Science | 12", "Open Access", "PNAS | vol. 1", "RESEARCH ARTICLE | SCIENCE",
+    "RESEARCH ARTICLE\u2003SCIENCE",
+])
 @pytest.mark.parametrize("separator", ["\n", "\n\n"])
 def test_repeated_table_cells_need_page_region_evidence(row, separator):
     text = separator.join(["Journal | count", row, row, row, "Total: 36"])
@@ -176,6 +267,12 @@ def test_repeated_table_cells_need_page_region_evidence(row, separator):
 def test_page_headers_do_not_remove_identical_body_cells():
     text = "Science | 12\nBody\fScience | 12\nTable\nScience | 12\nEnd"
     assert clean_embedded_text(text) == "Body Table Science | 12 End"
+
+
+def test_distinctive_journal_rows_survive_inside_page_table():
+    row = "RESEARCH ARTICLE | SCIENCE"
+    text = f"{row}\nBody\f{row}\nDocument type | journal\n{row}\n{row}\nTotal: 3"
+    assert clean_embedded_text(text) == f"Body Document type | journal {row} {row} Total: 3"
 
 
 def test_table_rules_are_not_page_break_evidence():
@@ -260,6 +357,41 @@ def test_document_builder_cleans_before_character_and_token_truncation(tmp_path)
     assert docs == [expected[:7900]]
     assert metadata[0]["clean_version"] == CLEAN_VERSION
     assert ids == ["SYNTHETIC"]
+
+
+@pytest.mark.parametrize("tag", ["script", "style", "span", "b"])
+@pytest.mark.parametrize("fields", ["title-abstract", "publication-note", "tags", "creators", "creator-name"])
+def test_document_builder_never_pairs_tags_across_source_fields(tmp_path, tag, fields):
+    search, client = make_search(tmp_path, clean_text=True)
+    opening, closing = f"<{tag}>literal", f"result</{tag}>"
+    data = {"title": "Title", "abstractNote": "Abstract"}
+    if fields == "title-abstract":
+        data.update(title=opening, abstractNote=closing)
+    elif fields == "publication-note":
+        data.update(publicationTitle=opening, note=closing)
+    elif fields == "tags":
+        data["tags"] = [{"tag": opening}, {"tag": closing}]
+    elif fields == "creators":
+        data["creators"] = [{"name": opening}, {"name": closing}]
+    else:
+        data["creators"] = [{"lastName": opening, "firstName": closing}]
+    search._process_item_batch([{"key": "FIELDS", "data": data}])
+    doc = client.upsert_documents.call_args.args[0][0]
+    assert opening in doc
+    assert closing in doc
+    assert "Abstract" in doc or fields == "title-abstract"
+
+
+def test_document_builder_preserves_code_and_limits_after_joining(tmp_path):
+    search, client = make_search(tmp_path, clean_text=True)
+    code = "The tokens `<script>` and `</script>` delimit a script element."
+    search._process_item_batch([{"key": "CODE", "data": {
+        "title": "<b>Title</b>", "abstractNote": code,
+        "fulltext": "<i>Body</i> " + "x" * 9000,
+    }}])
+    expected = ("Title No authors listed " + code + " Body " + "x" * 9000)[:8000]
+    client.truncate_text.assert_called_once_with(expected)
+    assert client.upsert_documents.call_args.args[0] == [expected]
 
 
 @pytest.mark.parametrize("clean_text", [False, None], ids=["explicit-off", "default-off"])
