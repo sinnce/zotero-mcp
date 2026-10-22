@@ -1,1 +1,1 @@
-Synthetic study of lattice birds We model imaginary birds on a square lattice. Density & motion remain bounded. The toy equation is E = mc^2 + x_i. 한국어 문장도 순서대로 보존합니다. A B Two short labels remain above.
+Synthetic study of lattice birds OPEN ACCESS OPEN ACCESS OPEN ACCESS We model imaginary birds on a square lattice. Density & motion remain bounded. The toy equation is E = mc^2 + x_i. 한국어 문장도 순서대로 보존합니다. A B Two short labels remain above.

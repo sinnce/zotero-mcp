@@ -289,7 +289,7 @@ def test_synthetic_fixture():
     after = (FIXTURES / "arxiv_watermark_after.txt").read_text().rstrip("\n")
     assert CLEAN_VERSION == "clean_v2"
     # The fixture's three OPEN ACCESS cells have no page-boundary evidence.
-    assert clean_embedded_text(before) == after.replace("We model", "OPEN ACCESS OPEN ACCESS OPEN ACCESS We model")
+    assert clean_embedded_text(before) == after
 
 
 @pytest.mark.parametrize("text", [
