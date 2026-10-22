@@ -102,7 +102,7 @@ class ZoteroSemanticSearch:
         self._retrieval_config = self._load_retrieval_config()
 
     def _load_retrieval_config(self) -> dict[str, Any]:
-        config = {"mode": "dense", "collapse": False, "noise_policy": "keep", "weights": {"dense": 1.0, "lex": 0.5}}
+        config = {"mode": "dense", "lexical_cache_size": 2, "collapse": False, "noise_policy": "keep", "weights": {"dense": 1.0, "lex": 0.5}}
         if self.config_path and os.path.exists(self.config_path):
             try:
                 with open(self.config_path) as stream:
@@ -113,6 +113,7 @@ class ZoteroSemanticSearch:
 
     def _retrieval_search(self, query, limit, filters):
         import time
+
         from .retrieval import LexicalIndex, fuse, local_similarity, select_results, supports_filter
 
         config = self._retrieval_config
@@ -125,8 +126,10 @@ class ZoteroSemanticSearch:
         count = collection.count()
         if not count:
             return dict(query=query, limit=limit, filters=filters, results=[], total_found=0)
-        depth = min(max(100, limit), count)
-        index = LexicalIndex.for_collection(collection) if hybrid else None
+        reranker = self._get_reranker()
+        pool_limit = limit * max(1, self._reranker_config.get("candidate_multiplier", 3)) if reranker else limit
+        depth = min(max(100, pool_limit), count)
+        index = LexicalIndex.for_collection(collection, cache_size=config.get("lexical_cache_size", 2)) if hybrid else None
         weights = config.get("weights", {})
         started = time.perf_counter()
         while True:
@@ -137,28 +140,40 @@ class ZoteroSemanticSearch:
             candidates = dense
             if hybrid:
                 lexical = index.search(query, depth, filters, config.get("title_weight", 3.0))
-                dense_scores = {r["item_key"]: r["similarity_score"] for r in dense}
-                missing = [r["item_key"] for r in lexical if r["item_key"] not in dense_scores]
-                stored = collection.get(ids=missing, include=["embeddings"]) if missing else None
-                vectors = dict(zip(stored["ids"], stored["embeddings"], strict=True)) if stored else {}
+                lexical_count = len(lexical)
+                dense_by_id = {r["item_key"]: r for r in dense}
+                missing = [r["item_key"] for r in lexical if r["item_key"] not in dense_by_id]
+                lookup = dict(ids=missing, include=["embeddings", "metadatas", "documents"])
+                if filters is not None:
+                    lookup["where"] = filters
+                stored = collection.get(**lookup) if missing else None
+                current = {}
                 configuration = getattr(collection, "configuration", None) or {}
                 space = (configuration.get("hnsw") or {}).get("space", (collection.metadata or {}).get("hnsw:space", "l2"))
-                for result in lexical:
-                    key = result["item_key"]
-                    result["similarity_score"] = dense_scores[key] if key in dense_scores else local_similarity(vectors[key], query_vector, space)
+                if stored and stored.get("embeddings") is not None:
+                    for key, vector, metadata, document in zip(
+                        stored["ids"], stored["embeddings"], stored["metadatas"], stored["documents"], strict=True
+                    ):
+                        if vector is not None:
+                            current[key] = dict(item_key=key, metadata=metadata or {}, matched_text=document or "",
+                                                similarity_score=local_similarity(vector, query_vector, space))
+                # Dense hits carry current metadata. Lexical-only hits must survive
+                # the filtered lookup, including deletion interleavings.
+                lexical = [dict(r, **(dense_by_id.get(r["item_key"]) or current[r["item_key"]]))
+                           for r in lexical if r["item_key"] in dense_by_id or r["item_key"] in current]
                 candidates = fuse(dense, lexical, query, w_dense=weights.get("dense", 1.0),
                                   w_lex=weights.get("lex", 0.5), k=config.get("k", 60),
                                   gate=config.get("gate", False), gate_threshold=config.get("gate_threshold", 0.8),
                                   gate_min_tokens=config.get("gate_min_tokens", 3))
-            selected = select_results(candidates, limit, config.get("collapse", False), config.get("noise_policy", "keep"))
-            exhausted = len(dense) < depth and (not hybrid or len(lexical) < depth)
-            if len(selected) >= limit or depth >= count or exhausted:
+            selected = select_results(candidates, pool_limit, config.get("collapse", False), config.get("noise_policy", "keep"))
+            exhausted = len(dense) < depth and (not hybrid or lexical_count < depth)
+            if len(selected) >= pool_limit or depth >= count or exhausted:
                 break
             depth = min(count, depth * 2)
-        reranker = self._get_reranker()
         if reranker and selected:
-            order = reranker.rerank(query, [r["matched_text"] for r in selected], top_k=limit)
+            order = reranker.rerank(query, [r["matched_text"] for r in selected], top_k=len(selected))
             selected = [selected[i] for i in order]
+            selected = select_results(selected, limit, config.get("collapse", False), config.get("noise_policy", "keep"))
         nested = dict(ids=[[r["item_key"] for r in selected]],
                       distances=[[1 - r["similarity_score"] for r in selected]],
                       documents=[[r["matched_text"] for r in selected]], metadatas=[[r["metadata"] for r in selected]])

@@ -65,14 +65,22 @@ An explicit configuration can enable the new path:
 The lexical branch builds a SQLite FTS5 `unicode61` index in memory from stored
 titles and documents. It quotes individual query tokens and ORs them. A batched
 content fingerprint detects changes even when collection counts do not change.
-The process cache is keyed by collection identity, count and fingerprint. There
-are no ingestion or corpus embedding changes.
+The process cache is a locked LRU keyed by collection identity, count and
+fingerprint. `semantic_search.retrieval.lexical_cache_size` bounds retained
+collection identities (positive integer, default 2). Callers and active searches hold references
+to their indexes as leases. Eviction releases cache ownership; a finalizer closes
+the SQLite connection after the last reference is released. A per-index lock
+serializes queries, and cursors close in `finally` blocks. Eviction therefore
+cannot close a connection used by an active query. There are no ingestion or corpus embedding changes.
 
 Hybrid retrieval initially fetches 100 candidates from each branch, uses weighted
 reciprocal ranks, and optionally forces the top lexical candidate to rank 1 when
 at least three distinct query tokens cover the configured fraction of its title.
 Metadata `$eq`, `$ne`, `$and`, `$in` and `$nin` filters apply to both branches;
 unsupported filters use dense retrieval and set `retrieval.lexical_filter_fallback`.
+Before fusion, lexical-only candidates are fetched again with the original
+Chroma filter and current embeddings, metadata, and documents. Absent candidates
+are dropped, including concurrent deletions and items that no longer match.
 Missing metadata satisfies negative `$ne`/`$nin` comparisons and fails positive comparisons. Collapse preserves the first
 ranked representative and records other keys in `aliases`. Same DOIs merge;
 titles merge only without conflicting DOIs. DOI-less records with an ambiguous
@@ -80,7 +88,10 @@ title remain separate from its conflicting DOI groups. Empty titles never merge.
 Noise uses only the left-trimmed, case-insensitive `ProQuest:` title prefix.
 `demote` moves matching candidates after other candidates, and `exclude` removes
 them. Suppression refills from deeper candidates until the requested limit or
-collection exhaustion.
+collection exhaustion. With reranking enabled, this refill targets
+`semantic_search.reranker.candidate_multiplier * limit` distinct candidates
+(default multiplier 3). The reranker receives that pool before final collapse and
+selection to the requested limit.
 
 `similarity_score` still means `1 - collection distance`, including locally scored
 lexical-only vectors. `ranking_score` and `ranking_method` describe hybrid order;

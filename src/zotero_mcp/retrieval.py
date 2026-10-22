@@ -6,6 +6,9 @@ import re
 import sqlite3
 import time
 import unicodedata
+import weakref
+from collections import OrderedDict
+from threading import Lock
 
 import numpy as np
 
@@ -79,13 +82,18 @@ class LexicalIndex:
 
     Fingerprinting uses batched reads on lookup so same-count replacements cannot
     silently reuse a stale index. Vectors are fetched only for lexical candidates.
-    No SQLite file is created. The cache retains one version per collection identity.
+    No SQLite file is created. The bounded LRU owns references to indexes.
+    Callers and active searches also hold references, delaying connection disposal
+    until the last reference is released. A per-index lock serializes SQL access.
     """
 
-    _cache = {}
+    _cache = OrderedDict()
+    _cache_lock = Lock()
 
     @classmethod
-    def for_collection(cls, collection, batch_size=500):
+    def for_collection(cls, collection, batch_size=500, cache_size=2):
+        if not isinstance(cache_size, int) or cache_size < 1:
+            raise ValueError("lexical_cache_size must be a positive integer")
         started = time.perf_counter()
         count = collection.count()
         records = []
@@ -98,22 +106,26 @@ class LexicalIndex:
                 records.append(record)
         identity = str(getattr(collection, "id", None) or id(collection))
         cache_key = (identity, count, digest.hexdigest())
-        previous = cls._cache.get(identity)
-        if previous and previous[0] == cache_key:
-            index = previous[1]
-        else:
-            index = cls(records)
-            cls._cache[identity] = (cache_key, index)
-        index.fingerprint_seconds = time.perf_counter() - started
-        return index
+        with cls._cache_lock:
+            previous = cls._cache.get(identity)
+            if previous and previous[0] == cache_key:
+                index = previous[1]
+            else:
+                index = cls(records)
+                cls._cache[identity] = (cache_key, index)
+            cls._cache.move_to_end(identity)
+            while len(cls._cache) > cache_size:
+                cls._cache.popitem(last=False)
+            index.fingerprint_seconds = time.perf_counter() - started
+            return index
 
     def __init__(self, records):
         started = time.perf_counter()
-        self.connection = sqlite3.connect(":memory:", check_same_thread=False)
+        connection = sqlite3.connect(":memory:", check_same_thread=False)
         try:
-            self.connection.execute("CREATE VIRTUAL TABLE fts USING fts5(title, document, tokenize='unicode61')")
+            connection.execute("CREATE VIRTUAL TABLE fts USING fts5(title, document, tokenize='unicode61')")
         except sqlite3.OperationalError as error:
-            self.connection.close()
+            connection.close()
             if "no such module: fts5" not in str(error):
                 raise
             # Some managed Python builds omit FTS5. Use a private connection;
@@ -122,13 +134,28 @@ class LexicalIndex:
                 import pysqlite3
             except ImportError:
                 raise RuntimeError("Hybrid retrieval requires SQLite FTS5; install the semantic extra or use an FTS5-enabled Python") from error
-            self.connection = pysqlite3.connect(":memory:", check_same_thread=False)
-            self.connection.execute("CREATE VIRTUAL TABLE fts USING fts5(title, document, tokenize='unicode61')")
+            connection = pysqlite3.connect(":memory:", check_same_thread=False)
+            try:
+                connection.execute("CREATE VIRTUAL TABLE fts USING fts5(title, document, tokenize='unicode61')")
+            except BaseException:
+                connection.close()
+                raise
         self.records = {}
-        for rowid, (key, document, metadata) in enumerate(records, 1):
-            self.connection.execute("INSERT INTO fts(rowid,title,document) VALUES (?,?,?)",
-                                    (rowid, metadata.get("title", ""), document))
-            self.records[rowid] = dict(item_key=key, matched_text=document, metadata=metadata)
+        try:
+            for rowid, (key, document, metadata) in enumerate(records, 1):
+                connection.execute("INSERT INTO fts(rowid,title,document) VALUES (?,?,?)",
+                                   (rowid, metadata.get("title", ""), document))
+                self.records[rowid] = dict(item_key=key, matched_text=document, metadata=dict(metadata))
+            connection.commit()
+        except BaseException:
+            connection.close()
+            raise
+        self._connection = connection
+        self._query_lock = Lock()
+        # The finalizer holds only the connection, never self. Python references
+        # act as leases: eviction releases cache ownership, while an active search
+        # keeps self alive until its cursor is consumed and the lock released.
+        self._finalizer = weakref.finalize(self, connection.close)
         self.build_seconds = time.perf_counter() - started
 
     def search(self, query, limit=100, where=None, title_weight=3.0):
@@ -138,19 +165,24 @@ class LexicalIndex:
         if not terms:
             return []
         expression = " OR ".join('"' + term.replace('"', '""') + '"' for term in terms)
-        rows = self.connection.execute(
-            "SELECT rowid, bm25(fts, ?, 1.0) FROM fts WHERE fts MATCH ? ORDER BY 2, rowid",
-            (title_weight, expression),
-        )
-        results = []
-        for rowid, score in rows:
-            record = self.records[rowid]
-            if matches_filter(record["metadata"], where):
-                results.append(dict(record, lexical_score=-score))
-                if len(results) >= limit:
-                    break
-        self.last_search_seconds = time.perf_counter() - started
-        return results
+        with self._query_lock:
+            rows = self._connection.execute(
+                "SELECT rowid, bm25(fts, ?, 1.0) FROM fts WHERE fts MATCH ? ORDER BY 2, rowid",
+                (title_weight, expression),
+            )
+            try:
+                results = []
+                for rowid, score in rows:
+                    record = self.records[rowid]
+                    if matches_filter(record["metadata"], where):
+                        results.append(dict(record, metadata=dict(record["metadata"]), lexical_score=-score))
+                        if len(results) >= limit:
+                            break
+                self.last_search_seconds = time.perf_counter() - started
+                return results
+            finally:
+                rows.close()
+
 
 
 def fuse(dense, lexical, query="", w_dense=1.0, w_lex=0.5, k=60,
