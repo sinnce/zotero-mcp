@@ -5,6 +5,7 @@ The production Gemini query path performs identity preprocessing (no truncation)
 """
 
 import argparse
+import fcntl
 import hashlib
 import json
 import os
@@ -12,7 +13,9 @@ import shutil
 import socket
 import stat
 import subprocess
+import tempfile
 import time
+import uuid
 from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
@@ -56,8 +59,22 @@ class QueryCache:
             est_cost_usd=0.0,
         )
         self.vectors = {}
-        npz = self.directory / "query-vectors.npz"
-        meta = self.directory / "query-vectors.json"
+        current = self.directory / "CURRENT"
+        has_current = current.exists()
+        self.generation = current.read_text().strip() if has_current else "0"
+        if self.generation != "0" and (
+            len(self.generation) != 32 or any(c not in "0123456789abcdef" for c in self.generation)
+        ):
+            raise ValueError("Invalid cache generation")
+        self.npz_path = self.directory / (
+            "query-vectors.npz" if self.generation == "0" else f"vectors-{self.generation}.npz"
+        )
+        npz = self.npz_path
+        meta = self.directory / (
+            "query-vectors.json" if self.generation == "0" else f"meta-{self.generation}.json"
+        )
+        if has_current and not (npz.exists() and meta.exists()):
+            raise ValueError("Incomplete committed query cache")
         if npz.exists() != meta.exists():
             raise ValueError("Incomplete query cache")
         if not npz.exists():
@@ -102,14 +119,92 @@ class QueryCache:
             raise ValueError(f"Query cache miss: {text_key(text)}") from None
 
     def save(self):
-        self.directory.mkdir(parents=True, exist_ok=True)
+        """Publish immutable files before CURRENT; retain older generations for readers.
+
+        CURRENT is authoritative. The contract exports are individually atomic, but
+        readers needing a consistent pair across concurrent commits must use CURRENT.
+        A publication error may leave the old or the new complete generation visible.
+        """
+        durable_directory(self.directory)
+        generation = uuid.uuid4().hex
         keys = list(self.vectors)
         vectors = np.asarray(list(self.vectors.values()), dtype=np.float32).reshape(-1, self.metadata["dimension"])
-        np.savez(self.directory / "query-vectors.npz", keys=np.asarray(keys, dtype="U64"), vectors=vectors)
-        write_json(self.directory / "query-vectors.json", self.metadata)
+        npz = self.directory / f"vectors-{generation}.npz"
+        meta = self.directory / f"meta-{generation}.json"
+        with atomic_file(npz) as stream:
+            np.savez(stream, keys=np.asarray(keys, dtype="U64"), vectors=vectors)
+        with atomic_file(meta) as stream:
+            stream.write((json.dumps(self.metadata, ensure_ascii=False, indent=2, allow_nan=False) + "\n").encode())
+        # Persist both immutable names before a pointer to them can become durable.
+        fsync_directory(self.directory)
+        with atomic_file(self.directory / "CURRENT") as stream:
+            stream.write((generation + "\n").encode())
+        fsync_directory(self.directory)
+        self.generation, self.npz_path = generation, npz
+        for source, name in ((npz, "query-vectors.npz"), (meta, "query-vectors.json")):
+            with atomic_file(self.directory / name) as stream, source.open("rb") as original:
+                shutil.copyfileobj(original, stream)
+        fsync_directory(self.directory)
 
 
-def embed_queries(suite, cache, max_cost_usd=0.90, price_per_million_tokens=0.20, model=MODEL, dimension=3072):
+def fsync_directory(directory):
+    fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def durable_directory(directory):
+    # Fsync newly created directory names too, before any paid reservations.
+    missing = []
+    parent = directory
+    while not parent.exists():
+        missing.append(parent)
+        parent = parent.parent
+    directory.mkdir(parents=True, exist_ok=True)
+    for path in reversed(missing):
+        fsync_directory(path.parent)
+
+
+@contextmanager
+def atomic_file(path):
+    """Flush a temporary sibling before atomically replacing its destination."""
+    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}-", dir=path.parent)
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            yield stream
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+
+
+@contextmanager
+def cache_lock(directory, fail_fast=False):
+    directory = Path(directory)
+    durable_directory(directory)
+    with (directory / ".lock").open("a+b") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | (fcntl.LOCK_NB if fail_fast else 0))
+        except BlockingIOError:
+            raise BlockingIOError("Query cache is locked by another fill") from None
+        try:
+            yield
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
+
+
+def embed_queries(
+    suite, cache, max_cost_usd=0.90, price_per_million_tokens=0.20, model=MODEL, dimension=3072, fail_fast=False
+):
+    # Lock before loading: a waiting writer must see all previous reservations.
+    with cache_lock(cache, fail_fast):
+        return _fill_queries(suite, cache, max_cost_usd, price_per_million_tokens, model, dimension)
+
+
+def _fill_queries(suite, cache, max_cost_usd, price_per_million_tokens, model, dimension):
     if not 0 <= max_cost_usd <= 0.90 or price_per_million_tokens <= 0:
         raise ValueError("Cost ceiling must be between $0 and $0.90; price must be positive")
     store = QueryCache(cache, model, dimension)
@@ -306,7 +401,7 @@ def run(snapshot, suite, cache, profile, output, k=100):
             snapshot_hashes=before,
             snapshot_hashes_after=after,
             suite_sha256=hashlib.sha256(Path(suite).read_bytes()).hexdigest(),
-            cache_sha256=hashlib.sha256((Path(cache) / "query-vectors.npz").read_bytes()).hexdigest(),
+            cache_sha256=hashlib.sha256(store.npz_path.read_bytes()).hexdigest(),
             ann_vs_exact_overlap_at_10=float(np.mean(overlaps)) if overlaps else None,
             diagnostic_note="Cosine exact reference; production retains the collection metric. For k<10 overlap is depth-limited.",
             query_count=len(rows),
@@ -325,6 +420,7 @@ def main():
     embed.add_argument("--price-per-million-tokens", type=float, default=0.20)
     embed.add_argument("--model", default=MODEL)
     embed.add_argument("--dimension", type=int, default=3072)
+    embed.add_argument("--fail-fast", action="store_true", help="Fail immediately if another cache fill holds the lock")
     runner = sub.add_parser("run")
     for name in ("snapshot", "suite", "cache", "output"):
         runner.add_argument(f"--{name}", required=True)
