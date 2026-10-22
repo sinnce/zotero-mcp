@@ -27,7 +27,7 @@ class FakeChromaClient:
         return text
 
 
-def test_process_item_batch_tracks_added_vs_updated(monkeypatch):
+def test_process_item_batch_tracks_added_and_skipped_existing(monkeypatch):
     monkeypatch.setattr(semantic_search, "get_zotero_client", lambda: object())
     search = semantic_search.ZoteroSemanticSearch(chroma_client=FakeChromaClient())
 
@@ -54,6 +54,8 @@ def test_process_item_batch_tracks_added_vs_updated(monkeypatch):
 
     stats = search._process_item_batch(items, force_rebuild=False)
 
-    assert stats["processed"] == 2
-    assert stats["updated"] == 1
+    assert stats["processed"] == 1
+    assert stats["updated"] == 0
     assert stats["added"] == 1
+    assert stats["skipped"] == 1
+    assert search.chroma_client.upserted_ids == ["ITEMB002"]

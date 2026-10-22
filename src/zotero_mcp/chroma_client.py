@@ -742,14 +742,15 @@ class ChromaClient:
             return None
 
     def get_existing_ids(self, ids: list[str]) -> set[str]:
-        """Return the subset of ids that already exist in the collection."""
+        """Return existing IDs; propagate lookup failures to prevent migration.
+
+        Treating an unavailable collection as empty would let a routine update
+        overwrite existing records under a different text policy.
+        """
         if not ids:
             return set()
-        try:
-            result = self.collection.get(ids=ids, include=[])
-            return set(result.get("ids", []))
-        except Exception:
-            return set()
+        result = self.collection.get(ids=ids, include=[])
+        return set(result["ids"])
 
 
 def _load_chroma_config(config_path: str | None = None) -> dict[str, Any]:

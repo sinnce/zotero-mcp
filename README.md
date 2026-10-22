@@ -204,15 +204,26 @@ zotero-mcp setup --semantic-config-only
 - **Daily**: Update once per day automatically
 - **Every N days**: Set custom interval
 
-Text cleaning defaults to `true` at `semantic_search.extraction.clean_text` in the config file.
-The `clean_v1` recipe removes rotated watermark runs, web chrome, HTML tags, and repeated
-running headers, then collapses whitespace before an 8,000-character cap and the model's
-token limit. It applies to newly indexed or explicitly re-indexed records only; changing
-this flag does not schedule a rebuild or change the collection or embedding model.
-Set it to `false` for legacy document text. Record metadata includes `clean_version`
-(`"clean_v1"` or `"legacy"`); older records may have no key, so mixed indexes remain detectable.
-The measured recipe is applied once to source text: repeated cleaning can trim a space
-left at the character cap or decode nested HTML entities further.
+Text cleaning defaults to `false` at `semantic_search.extraction.clean_text` in the config file.
+Enable it **for a deliberate rebuild**, for example set it to `true` and run
+`zotero-mcp update-db --force-rebuild`. The opt-in `clean_v2` policy removes verified
+arXiv chrome lines, inline data-image tokens, rotated stamps containing an arXiv
+identifier, allowlisted HTML tags and script/style contents, and running headers
+that match a header pattern and occur at least three times. Ordinary prose,
+inequalities, code templates, single-character table cells, and body headings stay.
+Cleaning precedes the 8,000-character cap (trimmed afterward) and the model's token limit.
+Ordinary HTML entities are decoded once after stripping. Angle-bracket entities and
+nested entities remain encoded to preserve literal text and keep repeated cleaning stable.
+
+Routine updates skip existing record IDs, including API-mode updates and records with
+missing or older `clean_version`; changing the flag cannot migrate them. New records
+use the configured policy. An explicit force rebuild replaces existing records.
+With `false`, legacy document bytes are unchanged. Record metadata identifies the
+policy as `"clean_v2"` or `"legacy"`; older records may have no key.
+`build-index` resolves the same flag from its explicit config, cleans metadata-only
+text before freezing document hashes, and records the policy in the frozen ledger,
+record metadata, source identity, collection metadata, and manifest. Its frozen text
+policy schema is `zotero-mcp-metadata-text/2.0.0`.
 
 ### Using Semantic Search
 

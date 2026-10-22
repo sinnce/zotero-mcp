@@ -106,10 +106,10 @@ class ZoteroSemanticSearch:
             try:
                 with open(self.config_path) as f:
                     config = json.load(f)
-                return config.get("semantic_search", {}).get("extraction", {}).get("clean_text", True)
+                return config.get("semantic_search", {}).get("extraction", {}).get("clean_text", False) is True
             except Exception as e:
                 logger.warning(f"Error loading text cleaning config: {e}")
-        return True
+        return False
 
     def _load_reranker_config(self) -> dict[str, Any]:
         """Load reranker configuration from file or use defaults."""
@@ -218,10 +218,13 @@ class ZoteroSemanticSearch:
 
         # Note content (if available)
         if note := data.get("note"):
-            # Clean HTML from notes
-            import re
-            note_text = re.sub(r'<[^>]+>', '', note)
-            extra_fields.append(note_text)
+            if self.clean_text:
+                extra_fields.append(note)
+            else:
+                # Preserve the legacy note bytes when cleaning is disabled.
+                import re
+                note_text = re.sub(r'<[^>]+>', '', note)
+                extra_fields.append(note_text)
 
         # Combine all text fields
         text_parts = [title, creators_text, abstract] + extra_fields
@@ -915,10 +918,20 @@ class ZoteroSemanticSearch:
         metadatas = []
         ids = []
 
+        # API mode fetches existing items too. Routine updates must not migrate
+        # their text policy (including missing/older clean_version metadata).
+        # A deliberate force rebuild is the only path that replaces existing IDs.
+        existing_ids = set() if force_rebuild else self.chroma_client.get_existing_ids(
+            [item.get("key", "") for item in items if item.get("key")]
+        )
+
         for item in items:
             try:
                 item_key = item.get("key", "")
                 if not item_key:
+                    stats["skipped"] += 1
+                    continue
+                if item_key in existing_ids:
                     stats["skipped"] += 1
                     continue
 
@@ -955,10 +968,6 @@ class ZoteroSemanticSearch:
 
         # Add documents to ChromaDB if any
         if documents:
-            existing_ids = set()
-            if not force_rebuild:
-                existing_ids = self.chroma_client.get_existing_ids(ids)
-
             try:
                 self.chroma_client.upsert_documents(documents, metadatas, ids)
                 for doc_id in ids:

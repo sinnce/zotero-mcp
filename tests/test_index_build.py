@@ -424,7 +424,8 @@ def test_source_identity_includes_port_path_and_policies() -> None:
     }
     assert identity["source_kind"] == "local-api"
     assert identity["library_id"] == "0"
-    assert identity["text_policy"] == "zotero-mcp-metadata-text/1.0.0"
+    assert identity["text_policy"] == "zotero-mcp-metadata-text/2.0.0"
+    assert identity["clean_version"] == "legacy"
 
 
 def test_metadata_document_is_exact_metadata_only_text() -> None:
@@ -549,6 +550,7 @@ def test_build_cli_applies_explicit_source_before_client_and_protects_real_and_d
                 },
                 "semantic_search": {
                     "embedding_model": "gemini",
+                    "extraction": {"clean_text": True},
                     "embedding_config": {
                         "model_name": "gemini-embedding-001",
                         "api_key": "test-key",
@@ -576,6 +578,7 @@ def test_build_cli_applies_explicit_source_before_client_and_protects_real_and_d
 
     def build(*args: object, **kwargs: object) -> dict[str, object]:
         captured["protected_paths"] = kwargs["protected_paths"]
+        assert kwargs["clean_text"] is True
         return {
             "index_identity": {"index_uuid": "index", "build_run_id": "run"},
             "counts": {"expected": 2, "indexed": 2},
@@ -874,3 +877,44 @@ def test_sealed_export_recomputes_manifest_content_hashes(
 
     with pytest.raises(SnapshotProvenanceError, match="contents differ"):
         export_sealed_snapshot(config, output)
+
+
+@pytest.mark.parametrize("clean_text", [False, True])
+def test_isolated_builder_freezes_resolved_cleaning_policy(tmp_path: Path, clean_text: bool) -> None:
+    from zotero_mcp.text_clean import CLEAN_VERSION, clean_embedded_text
+
+    items = _items()
+    items[0]["data"]["title"] = "<b>Privacy policy research</b>"
+    items[0]["data"]["abstractNote"] = "Body &amp; detail " + "x" * 8100
+    output = tmp_path / "policy-index"
+    manifest = build_isolated_index(
+        FakeZotero(items), _resolved(), output,
+        embedding_factory=_factory, clean_text=clean_text,
+    )
+    ledger = json.loads((output / "input-ledger.json").read_text())
+    policy = CLEAN_VERSION if clean_text else "legacy"
+    assert manifest["clean_version"] == policy
+    assert manifest["source_identity"]["clean_version"] == policy
+    assert manifest["collection_metadata"]["clean_version"] == policy
+    assert ledger["clean_version"] == policy
+    assert ledger["schema_version"] == "zotero-mcp-metadata-text/2.0.0"
+    assert manifest["source_identity"]["text_policy"] == ledger["schema_version"]
+    for record in ledger["records"]:
+        item = next(item for item in items if item["key"] == record["key"])
+        legacy = metadata_document(item)
+        expected = clean_embedded_text(legacy) if clean_text else legacy
+        assert record["document"] == expected
+        assert record["document_sha256"] == hashlib.sha256(expected.encode()).hexdigest()
+        assert record["metadata"]["clean_version"] == policy
+    # Both cleaning and policy identity are frozen into provenance, even when
+    # an item's text itself has no HTML or chrome to remove.
+    assert source_identity(FakeZotero(items), clean_text=True) != source_identity(FakeZotero(items))
+
+
+def test_metadata_document_cleaner_sees_original_note_markup() -> None:
+    from zotero_mcp.text_clean import clean_embedded_text
+
+    item = {"data": {"title": "Math", "note": "0 < x < 1 and y > 2 <script>hidden</script>"}}
+    assert metadata_document(item, clean_text=True) == clean_embedded_text(
+        "Math No authors listed 0 < x < 1 and y > 2 <script>hidden</script>"
+    )
