@@ -34,21 +34,54 @@ def test_preserve_meaningful_short_cells(cells):
     assert drop_rotated_watermark_runs(text) == text
 
 
+@pytest.mark.parametrize("reverse", [False, True])
+def test_watermark_keeps_adjacent_meaningful_cells(reverse):
+    stamp = "arXiv:2401.12345"
+    if reverse:
+        stamp = stamp[::-1]
+    text = "Values\n1\n2\n3\n" + "\n".join(stamp) + "\n4\n5\nEnd"
+    assert drop_rotated_watermark_runs(text) == "Values\n1\n2\n3\n4\n5\nEnd"
+
+
+def test_watermark_keeps_blank_and_indented_noncontributing_lines():
+    text = "Start\nA\n\n" + "\n".join(" " + c for c in "arXiv:2401.12345") + "\n\nB\nEnd"
+    assert drop_rotated_watermark_runs(text) == "Start\nA\n\n\nB\nEnd"
+
+
 @pytest.mark.parametrize("chrome", [
     "Change to arXiv's privacy policy", "I Understand", "Skip to main content",
-    "Skip to yearly menu bar", "![arxiv logo](https://example.invalid/logo)",
+    "The arXiv Privacy Policy has changed. Please review the new policy.",
+    "![arxiv logo](https://example.invalid/logo)",
     "![other](data:image/png;base64,FAKE)", "[logo](data:image/png,FAKE)",
-    "[Logo](https://example.invalid/logo.svg)",
     "[![arxiv logo](logo.png)](https://arxiv.org)",
-    "open search", "open navigation menu", "# [Cornell University](https://example.invalid/)",
-    "arxiv logo", "main navigation", "search", "advanced search", "help", "about", "donate",
-    "menu", "close search", "close navigation menu",
-    "* [Privacy Policy](https://arxiv.org/help/policies/privacy_policy)",
+    "open search", "open navigation menu",
     "The [arXiv Privacy Policy](https://info.arxiv.org/help/policies/privacy_policy.html) "
     "has changed. By continuing to use arxiv.org, you are agreeing to the privacy policy.",
 ])
 def test_drop_web_chrome_lines(chrome):
     assert drop_web_chrome_lines(f"Start\n{chrome}\nEnd") == "Start\nEnd"
+
+
+@pytest.mark.parametrize("generic", [
+    "Please review our privacy policy.", "About", "Help", "arxiv logo", "main navigation",
+    "search", "advanced search", "donate", "menu", "close search", "close navigation menu",
+    "Skip to yearly menu bar", "# [Cornell University](https://example.invalid/)",
+    "[Logo](https://example.invalid/logo.svg)",
+    "* [Privacy Policy](https://arxiv.org/help/policies/privacy_policy)",
+])
+def test_generic_chrome_needs_nearby_distinctive_banner(generic):
+    assert drop_web_chrome_lines(generic) == generic
+    assert clean_embedded_text(generic) == generic
+    assert drop_web_chrome_lines(f"{generic}\nI Understand\n{generic}") == ""
+    distant = "I Understand\n" + "Body\n" * 5 + generic
+    assert drop_web_chrome_lines(distant) == "Body\n" * 5 + generic
+
+
+def test_chrome_classification_uses_original_lines_only():
+    assert clean_embedded_text("Please review\nour privacy policy.") == "Please review our privacy policy."
+    assert clean_embedded_text("I\nUnderstand") == "I Understand"
+    assert clean_embedded_text("Help <b></b>") == "Help"
+    assert drop_web_chrome_lines("![logo](logo.png)\nAbout\nHelp") == "About\nHelp"
 
 
 @pytest.mark.parametrize("text", [
@@ -74,7 +107,7 @@ def test_inline_data_image_preserves_surrounding_prose():
     ("<DIV><p>Body</p></DIV>", "  Body  "),
     ("A<script>danger <b>nested</b></script>B<style>x{}</style>C", "A  B  C"),
     ("A<SCRIPT type='text/javascript'>hidden</SCRIPT>B", "A  B"),
-    ("A<script>unclosed", "A "),
+    ("A<script>unclosed", "A<script>unclosed"),
     ("A<script>const tag = \"<b title='\";</script>B", "A  B"),
     ("0 < x < 1 and y > 2", "0 < x < 1 and y > 2"),
     ("std::vector<int>", "std::vector<int>"),
@@ -91,14 +124,33 @@ def test_strip_html(text, expected):
     assert clean_embedded_text(cleaned) == cleaned
 
 
+@pytest.mark.parametrize("literal", ["a<b>c", "std::vector<span>", "</span>", "<span>", "<b title='x'>"])
+@pytest.mark.parametrize("markup", ["<b>Title</b>", "<span>Title</span>"])
+def test_html_markup_elsewhere_does_not_consume_literal_tags(markup, literal):
+    assert clean_embedded_text(markup + "\nThe notation " + literal) == "Title The notation " + literal
+    assert clean_embedded_text(literal + "\n" + markup) == literal + " Title"
+
+
+def test_html_pairing_is_local_to_paragraphs():
+    assert strip_html("<span>literal\n\nother</span>") == "<span>literal\n\nother</span>"
+    assert strip_html("<span>literal\r\n\r\nother</span>") == "<span>literal\r\n\r\nother</span>"
+    assert strip_html("<span>real\nmarkup</span>") == " real\nmarkup "
+    assert strip_html("<unknown>literal</unknown>") == "<unknown>literal</unknown>"
+    assert strip_html("A<hr>B<img src='x'>C") == "A B C"
+    source = "<span>literal\n\nother</span> " + "x" * 9000
+    assert clean_embedded_text(source) == ("<span>literal other</span> " + "x" * 9000)[:8000]
+
+
 def test_running_headers_require_pattern_and_three_repetitions():
     header = "RESEARCH ARTICLE | SCIENCE"
     assert drop_running_headers(f"{header}\nBody\n research article  | SCIENCE\nEnd") == (
         f"{header}\nBody\n research article  | SCIENCE\nEnd"
     )
     assert drop_running_headers(f"{header}\nBody\nresearch article | SCIENCE\n{header}") == "Body"
-    assert drop_running_headers("OPEN ACCESS\nBody\nOpen Access\nOPEN ACCESS") == "Body"
-    assert drop_running_headers("PNAS | vol. 1\nBody\nPNAS | vol. 1\nPNAS | vol. 1") == "Body"
+    assert collapse_whitespace(drop_running_headers("OPEN ACCESS\nBody\fOpen Access\nBody\fOPEN ACCESS")) == "Body Body"
+    assert collapse_whitespace(drop_running_headers(
+        "PNAS | vol. 1\nBody\n<!-- page break -->\nPNAS | vol. 1\nBody\n<!-- page break -->\nPNAS | vol. 1"
+    )) == "Body <!-- page break --> Body <!-- page break -->"
     assert drop_running_headers("RESEARCH ARTICLE\u2003SCIENCE\n" * 3 + "Body") == "Body"
 
 
@@ -111,6 +163,26 @@ def test_preserve_body_headings_and_repeated_data(text):
     assert drop_running_headers(text) == text.rstrip("\n")
 
 
+@pytest.mark.parametrize("row", ["Science | 12", "Open Access", "PNAS | vol. 1"])
+@pytest.mark.parametrize("separator", ["\n", "\n\n"])
+def test_repeated_table_cells_need_page_region_evidence(row, separator):
+    text = separator.join(["Journal | count", row, row, row, "Total: 36"])
+    assert drop_running_headers(text) == text
+    assert clean_embedded_text(text) == collapse_whitespace(text)
+    # Starting a table at the document start is not itself page evidence.
+    assert drop_running_headers(separator.join([row] * 3)) == separator.join([row] * 3)
+
+
+def test_page_headers_do_not_remove_identical_body_cells():
+    text = "Science | 12\nBody\fScience | 12\nTable\nScience | 12\nEnd"
+    assert clean_embedded_text(text) == "Body Table Science | 12 End"
+
+
+def test_table_rules_are_not_page_break_evidence():
+    text = "Open Access\n---\nOpen Access\n---\nOpen Access"
+    assert drop_running_headers(text) == text
+
+
 def test_collapse_whitespace():
     assert collapse_whitespace(" \tFirst\n\nsecond\r\nthird  ") == "First second third"
 
@@ -119,7 +191,8 @@ def test_synthetic_fixture():
     before = (FIXTURES / "arxiv_watermark_before.txt").read_text()
     after = (FIXTURES / "arxiv_watermark_after.txt").read_text().rstrip("\n")
     assert CLEAN_VERSION == "clean_v2"
-    assert clean_embedded_text(before) == after
+    # The fixture's three OPEN ACCESS cells have no page-boundary evidence.
+    assert clean_embedded_text(before) == after.replace("We model", "OPEN ACCESS OPEN ACCESS OPEN ACCESS We model")
 
 
 @pytest.mark.parametrize("text", [
@@ -129,7 +202,7 @@ def test_synthetic_fixture():
     "&amp;&#97;mp;", "a<&#97;>", "<i> ![x](data:image/png,x)<I Understand</style>>",
     "x" * 7998 + "<beta>", "x" * 7995 + "&amp;lt;",
     "x" * 9000, "x" * 7999 + " tail", "&amp;lt;b&amp;gt;Nested&amp;lt;/b&amp;gt;",
-    "&lt;i&gt;Literal&lt;/i&gt; &amp; ordinary", "I\nUnderstand", "Help <b></b>",
+    "&lt;i&gt;Literal&lt;/i&gt; &amp; ordinary", "Help <b></b>",
 ])
 def test_idempotence(text):
     cleaned = clean_embedded_text(text)
