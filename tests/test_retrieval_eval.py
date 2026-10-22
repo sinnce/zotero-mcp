@@ -2,6 +2,8 @@
 
 import json
 import socket
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import MagicMock, patch
 
 import chromadb
@@ -249,7 +251,8 @@ def test_count_mismatch_preserves_source(tmp_path, monkeypatch):
 
 def test_cache_checksum_rejects_tampering(tmp_path):
     filled_cache(tmp_path)
-    meta = tmp_path / "query-vectors.json"
+    generation = (tmp_path / "CURRENT").read_text().strip()
+    meta = tmp_path / f"meta-{generation}.json"
     data = json.loads(meta.read_text())
     data["entries"][0]["text"] = "tampered"
     meta.write_text(json.dumps(data))
@@ -283,3 +286,191 @@ def test_injected_search_preserves_mcp_markdown(tmp_path, monkeypatch, dummy_ctx
     assert "Alpha" in result
     assert "1.000" in result
     assert "A" in result
+
+
+def test_legacy_generation_zero_and_migration(tmp_path):
+    original = filled_cache(tmp_path)
+    (tmp_path / "CURRENT").unlink()
+    before = {p.name: p.read_bytes() for p in tmp_path.iterdir()}
+    legacy = ev.QueryCache(tmp_path, dimension=3)
+    assert legacy.generation == "0"
+    assert legacy.embed_query("first") == original.embed_query("first")
+    assert before == {p.name: p.read_bytes() for p in tmp_path.iterdir()}
+    legacy.save()
+    assert ev.QueryCache(tmp_path, dimension=3).generation != "0"
+    assert (tmp_path / "query-vectors.npz").read_bytes() == legacy.npz_path.read_bytes()
+    assert json.loads((tmp_path / "query-vectors.json").read_text()) == legacy.metadata
+
+
+# Five file fsyncs/renames and three directory fsyncs in each publication.
+@pytest.mark.parametrize("operation,count", [("replace", 5), ("fsync", 8)])
+@pytest.mark.parametrize("after", [False, True])
+def test_generation_publication_faults(tmp_path, monkeypatch, operation, count, after):
+    for boundary in range(1, count + 1):
+        directory = tmp_path / str(boundary)
+        store = filled_cache(directory)
+        old_generation = store.generation
+        immutable = {
+            p: p.read_bytes() for p in directory.iterdir()
+            if p.name in {f"vectors-{old_generation}.npz", f"meta-{old_generation}.json"}
+        }
+        store.vectors[ev.text_key("third")] = np.array([0, 0, 1], dtype=np.float32)
+        store.metadata["entries"].append(dict(key=ev.text_key("third"), text="third"))
+        real = getattr(ev.os, operation)
+        calls = 0
+
+        def fault(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == boundary and not after:
+                raise OSError("injected publication failure")
+            result = real(*args, **kwargs)
+            if calls == boundary and after:
+                raise OSError("injected publication failure")
+            return result
+
+        with monkeypatch.context() as scoped:
+            scoped.setattr(ev.os, operation, fault)
+            with pytest.raises(OSError, match="injected"):
+                store.save()
+        assert calls == boundary
+        loaded = ev.QueryCache(directory, dimension=3)
+        assert loaded.embed_query("first") == [1, 0, 0]
+        assert len(loaded.vectors) in (2, 3)
+        assert len(loaded.metadata["entries"]) == len(loaded.vectors)
+        assert all(p.read_bytes() == contents for p, contents in immutable.items())
+        # Before CURRENT's rename, only the previous complete generation is visible.
+        if (operation == "replace" and (boundary < 3 or (boundary == 3 and not after))) or (
+            operation == "fsync" and boundary <= 4
+        ):
+            assert loaded.generation == old_generation
+        # Every old pair remains independently readable even after pointer publication.
+        with np.load(directory / f"vectors-{old_generation}.npz", allow_pickle=False) as arrays:
+            old_meta = json.loads((directory / f"meta-{old_generation}.json").read_text())
+            assert set(arrays["keys"]) == {entry["key"] for entry in old_meta["entries"]}
+        assert not list(directory.glob(".*-*"))
+
+
+@pytest.mark.parametrize("operation,count", [("replace", 5), ("fsync", 8)])
+@pytest.mark.parametrize("completion", [False, True])
+def test_fill_publication_failure_preserves_spend(tmp_path, monkeypatch, operation, count, completion):
+    monkeypatch.setenv("GEMINI_API_KEY", "test")
+    suite = suite_file(tmp_path, [dict(query_id="q", text="x")])
+    for boundary in range(1, count + 1):
+        directory = tmp_path / str(boundary)
+        filled_cache(directory)
+        real = getattr(ev.os, operation)
+        calls = 0
+
+        def fault(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == boundary + (count if completion else 0):
+                raise OSError("injected fill failure")
+            return real(*args, **kwargs)
+
+        with monkeypatch.context() as scoped, patch.object(ev, "GeminiEmbeddingFunction") as provider:
+            scoped.setattr(ev.os, operation, fault)
+            provider.return_value.last_query_usage = None
+            provider.return_value.last_query_statistics = None
+            provider.return_value.embed_query.return_value = [0, 0, 1]
+            with pytest.raises(OSError, match="injected"):
+                ev.embed_queries(suite, directory, dimension=3)
+            assert provider.return_value.embed_query.call_count == int(completion)
+        loaded = ev.QueryCache(directory, dimension=3)
+        assert len(loaded.vectors) in ((2, 3) if completion else (2,))
+        attempts = loaded.metadata["usage"].get("attempts", 0)
+        assert attempts in ((1,) if completion else (0, 1))
+        assert loaded.metadata["est_cost_usd"] == pytest.approx(attempts * 0.0000066)
+
+
+def test_crash_after_provider_keeps_durable_reservation(tmp_path, monkeypatch):
+    class Crash(BaseException):
+        pass
+
+    monkeypatch.setenv("GEMINI_API_KEY", "test")
+    suite = suite_file(tmp_path, [dict(query_id="q", text="x")])
+    directory = tmp_path / "cache"
+
+    def crash(text):
+        reserved = ev.QueryCache(directory, dimension=3)
+        assert reserved.metadata["usage"]["attempts"] == 1
+        assert reserved.metadata["est_cost_usd"] == pytest.approx(0.0000066)
+        raise Crash()
+
+    with patch.object(ev, "GeminiEmbeddingFunction") as provider:
+        provider.return_value.embed_query.side_effect = crash
+        with pytest.raises(Crash):
+            ev.embed_queries(suite, directory, dimension=3, max_cost_usd=0.000007)
+        with pytest.raises(ValueError, match="exceeds cap"):
+            ev.embed_queries(suite, directory, dimension=3, max_cost_usd=0.000007)
+        assert provider.return_value.embed_query.call_count == 1
+    assert ev.QueryCache(directory, dimension=3).metadata["usage"]["attempts"] == 1
+
+
+@pytest.mark.parametrize("fail_fast,cap", [(False, 0.000007), (False, 0.000014), (True, 0.000014)])
+def test_concurrent_fill_serializes_budget(tmp_path, monkeypatch, fail_fast, cap):
+    monkeypatch.setenv("GEMINI_API_KEY", "test")
+    first_suite = suite_file(tmp_path, [dict(query_id="q", text="x")])
+    second_suite = tmp_path / "second.jsonl"
+    second_suite.write_text(json.dumps(dict(query_id="q", text="y")) + "\n")
+    directory = tmp_path / "cache"
+    entered = threading.Event()
+    release = threading.Event()
+    contender = threading.Event()
+    real_flock = ev.fcntl.flock
+
+    def observed_flock(fd, flags):
+        if flags & ev.fcntl.LOCK_EX and entered.is_set():
+            contender.set()
+        return real_flock(fd, flags)
+
+    def embed(text):
+        reserved = ev.QueryCache(directory, dimension=3)
+        assert reserved.metadata["usage"]["attempts"] == (1 if text == "x" else 2)
+        if text == "x":
+            entered.set()
+            assert release.wait(10)
+        return [1, 0, 0]
+
+    monkeypatch.setattr(ev.fcntl, "flock", observed_flock)
+    with patch.object(ev, "GeminiEmbeddingFunction") as provider, ThreadPoolExecutor(max_workers=2) as pool:
+        provider.return_value.last_query_usage = None
+        provider.return_value.last_query_statistics = None
+        provider.return_value.embed_query.side_effect = embed
+        first = pool.submit(ev.embed_queries, first_suite, directory, cap, dimension=3)
+        second = None
+        try:
+            assert entered.wait(10)
+            second = pool.submit(ev.embed_queries, second_suite, directory, cap, dimension=3, fail_fast=fail_fast)
+            assert contender.wait(10)
+            if fail_fast:
+                with pytest.raises(BlockingIOError, match="locked"):
+                    second.result(timeout=10)
+            else:
+                assert not second.done()
+        finally:
+            release.set()
+        first.result(timeout=10)
+        if not fail_fast:
+            if cap < 0.00001:
+                with pytest.raises(ValueError, match="exceeds cap"):
+                    second.result(timeout=10)
+            else:
+                second.result(timeout=10)
+        expected = 2 if not fail_fast and cap > 0.00001 else 1
+        assert provider.return_value.embed_query.call_count == expected
+    loaded = ev.QueryCache(directory, dimension=3)
+    assert loaded.metadata["usage"]["attempts"] == expected
+    assert loaded.metadata["est_cost_usd"] == pytest.approx(expected * 0.0000066)
+    assert loaded.metadata["est_cost_usd"] <= cap
+    assert len(loaded.vectors) == expected
+
+
+def test_current_ignores_torn_contract_exports(tmp_path):
+    original = filled_cache(tmp_path)
+    (tmp_path / "query-vectors.json").write_text("interrupted export")
+    (tmp_path / "query-vectors.npz").unlink()
+    loaded = ev.QueryCache(tmp_path, dimension=3)
+    assert loaded.generation == original.generation
+    assert loaded.embed_query("first") == [1, 0, 0]
