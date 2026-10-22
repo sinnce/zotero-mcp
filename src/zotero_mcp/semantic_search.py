@@ -25,6 +25,7 @@ from pyzotero import zotero
 
 from .chroma_client import ChromaClient, create_chroma_client
 from .client import get_zotero_client
+from .text_clean import CLEAN_VERSION, clean_embedded_text
 from .utils import format_creators, is_local_mode
 from .local_db import LocalZoteroReader, get_local_zotero_reader
 
@@ -93,10 +94,22 @@ class ZoteroSemanticSearch:
 
         # Load update configuration
         self.update_config = self._load_update_config()
+        self.clean_text = self._load_clean_text_config()
 
         # Reranker (lazy-initialized on first search)
         self._reranker: CrossEncoderReranker | None = None
         self._reranker_config = self._load_reranker_config()
+
+    def _load_clean_text_config(self) -> bool:
+        """Load the ingestion-only cleaning flag; never invalidate existing records."""
+        if self.config_path and os.path.exists(self.config_path):
+            try:
+                with open(self.config_path) as f:
+                    config = json.load(f)
+                return config.get("semantic_search", {}).get("extraction", {}).get("clean_text", True)
+            except Exception as e:
+                logger.warning(f"Error loading text cleaning config: {e}")
+        return True
 
     def _load_reranker_config(self) -> dict[str, Any]:
         """Load reranker configuration from file or use defaults."""
@@ -264,6 +277,7 @@ class ZoteroSemanticSearch:
                 break
         metadata["citation_key"] = citation_key
 
+        metadata["clean_version"] = CLEAN_VERSION if self.clean_text else "legacy"
         return metadata
 
     def should_update_database(self) -> bool:
@@ -916,6 +930,10 @@ class ZoteroSemanticSearch:
                     doc_text = (structured_text + "\n\n" + fulltext) if structured_text.strip() else fulltext
                 else:
                     doc_text = structured_text
+                # Clean once across all fields, including fulltext and HTML-bearing
+                # structured fields, before either character or model token limits.
+                if self.clean_text:
+                    doc_text = clean_embedded_text(doc_text)
                 metadata = self._create_metadata(item)
 
                 if not doc_text.strip():

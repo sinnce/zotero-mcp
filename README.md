@@ -204,6 +204,16 @@ zotero-mcp setup --semantic-config-only
 - **Daily**: Update once per day automatically
 - **Every N days**: Set custom interval
 
+Text cleaning defaults to `true` at `semantic_search.extraction.clean_text` in the config file.
+The `clean_v1` recipe removes rotated watermark runs, web chrome, HTML tags, and repeated
+running headers, then collapses whitespace before an 8,000-character cap and the model's
+token limit. It applies to newly indexed or explicitly re-indexed records only; changing
+this flag does not schedule a rebuild or change the collection or embedding model.
+Set it to `false` for legacy document text. Record metadata includes `clean_version`
+(`"clean_v1"` or `"legacy"`); older records may have no key, so mixed indexes remain detectable.
+The measured recipe is applied once to source text: repeated cleaning can trim a space
+left at the character cap or decode nested HTML entities further.
+
 ### Using Semantic Search
 
 After setup, initialize your search database:

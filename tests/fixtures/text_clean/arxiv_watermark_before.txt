@@ -1,0 +1,24 @@
+Synthetic study of lattice birds
+Change to arXiv's privacy policy
+Skip to main content
+![arxiv logo](data:image/svg+xml;base64,SYNTHETIC)
+# [Cornell University](https://example.invalid/)
+open search
+2
+0
+2
+6
+v
+i
+X
+r
+a
+RESEARCH ARTICLE | APPLIED PHYSICAL SCIENCES
+OPEN ACCESS
+We model imaginary birds on a square lattice.<br xmlns="http://www.w3.org/1999/xhtml" /> Density &amp; motion remain bounded.
+RESEARCH ARTICLE | APPLIED PHYSICAL SCIENCES
+The toy equation is E = mc^2 + x_i.
+한국어 문장도 순서대로 보존합니다.
+A
+B
+Two short labels remain above.
