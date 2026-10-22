@@ -217,6 +217,11 @@ def cache_lock(directory, fail_fast=False):
         except BlockingIOError:
             raise BlockingIOError("Query cache is locked by another fill") from None
         try:
+            # Existing names may come from an interrupted or concurrent mkdir.
+            # Make the entire ancestry durable before loading or reserving spend.
+            resolved = directory.resolve()
+            for path in (resolved, *resolved.parents):
+                fsync_directory(path)
             yield
         finally:
             fcntl.flock(lock, fcntl.LOCK_UN)
