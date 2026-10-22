@@ -643,6 +643,9 @@ cd /home/sinnce/zotero-mcp
 uv run pytest tests/ -q
 ```
 
+For offline text-query retrieval evaluation and scratch-copy safety, see
+[the evaluator guide](docs/retrieval-eval.md).
+
 ### Local setup notes and dependency discrepancies
 
 The commands above describe the baseline checkout, but the complete test suite imports
