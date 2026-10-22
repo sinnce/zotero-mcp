@@ -100,6 +100,44 @@ def test_cost_cap_before_provider(tmp_path):
         provider.assert_not_called()
 
 
+def test_existing_cache_ancestry_synced_before_reservation_and_provider(tmp_path, monkeypatch):
+    suite = suite_file(tmp_path, [dict(query_id="q", text="x")])
+    directory = tmp_path / "existing" / "parent" / "cache"
+    directory.mkdir(parents=True)
+    monkeypatch.setenv("GEMINI_API_KEY", "test")
+    events = []
+    real_flock = ev.fcntl.flock
+    real_save = ev.QueryCache.save
+
+    def observed_flock(fd, flags):
+        result = real_flock(fd, flags)
+        events.append(("lock", flags))
+        return result
+
+    def observed_save(store):
+        events.append(("reservation", None))
+        return real_save(store)
+
+    def embed(text):
+        events.append(("provider", None))
+        return [1, 0, 0]
+
+    monkeypatch.setattr(ev.fcntl, "flock", observed_flock)
+    monkeypatch.setattr(ev, "fsync_directory", lambda path: events.append(("sync", path)))
+    monkeypatch.setattr(ev.QueryCache, "save", observed_save)
+    with patch.object(ev, "GeminiEmbeddingFunction") as provider:
+        provider.return_value.last_query_usage = None
+        provider.return_value.last_query_statistics = None
+        provider.return_value.embed_query.side_effect = embed
+        ev.embed_queries(suite, directory, dimension=3)
+        provider.return_value.embed_query.assert_called_once_with("x")
+
+    ancestry = [directory.resolve(), *directory.resolve().parents]
+    expected = [("lock", ev.fcntl.LOCK_EX), *(("sync", path) for path in ancestry)]
+    assert events[:len(expected)] == expected
+    assert len(ancestry) < events.index(("reservation", None)) < events.index(("provider", None))
+
+
 def test_retries_charge_budget_and_resume(tmp_path, monkeypatch):
     suite = suite_file(tmp_path, [dict(query_id="q", text="x")])
     monkeypatch.setenv("GEMINI_API_KEY", "test")
@@ -361,11 +399,12 @@ def test_fill_publication_failure_preserves_spend(tmp_path, monkeypatch, operati
         filled_cache(directory)
         real = getattr(ev.os, operation)
         calls = 0
+        startup_syncs = len(directory.resolve().parents) + 1 if operation == "fsync" else 0
 
         def fault(*args, **kwargs):
             nonlocal calls
             calls += 1
-            if calls == boundary + (count if completion else 0):
+            if calls == startup_syncs + boundary + (count if completion else 0):
                 raise OSError("injected fill failure")
             return real(*args, **kwargs)
 
