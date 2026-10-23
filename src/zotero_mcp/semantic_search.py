@@ -78,7 +78,8 @@ class ZoteroSemanticSearch:
     def __init__(self,
                  chroma_client: ChromaClient | None = None,
                  config_path: str | None = None,
-                 db_path: str | None = None):
+                 db_path: str | None = None,
+                 zotero_client: Any | None = None):
         """
         Initialize semantic search.
 
@@ -86,9 +87,10 @@ class ZoteroSemanticSearch:
             chroma_client: Optional ChromaClient instance
             config_path: Path to configuration file
             db_path: Optional path to Zotero database (overrides config file)
+            zotero_client: Optional enrichment client; bypasses the live client factory
         """
         self.chroma_client = chroma_client or create_chroma_client(config_path)
-        self.zotero_client = get_zotero_client()
+        self.zotero_client = zotero_client if zotero_client is not None else get_zotero_client()
         self.config_path = config_path
         self.db_path = db_path  # CLI override for Zotero database path
 

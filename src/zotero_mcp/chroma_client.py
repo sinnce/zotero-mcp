@@ -9,7 +9,9 @@ import json
 import logging
 import os
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
@@ -99,7 +101,8 @@ class GeminiEmbeddingFunction(EmbeddingFunction):
     max_input_tokens = 2000  # gemini-embedding-001 limit is 2048
 
     def __init__(
-        self, model_name: str = "gemini-embedding-001", api_key: str | None = None, base_url: str | None = None
+        self, model_name: str = "gemini-embedding-001", api_key: str | None = None, base_url: str | None = None,
+        max_attempts: int | None = None
     ):
         self.model_name = model_name
         self.api_key = api_key or os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
@@ -112,9 +115,13 @@ class GeminiEmbeddingFunction(EmbeddingFunction):
             from google.genai import types
 
             client_kwargs = {"api_key": self.api_key}
-            if self.base_url:
-                http_options = types.HttpOptions(baseUrl=self.base_url)
-                client_kwargs["http_options"] = http_options
+            if self.base_url or max_attempts is not None:
+                options = {}
+                if self.base_url:
+                    options["baseUrl"] = self.base_url
+                if max_attempts is not None:
+                    options["retry_options"] = types.HttpRetryOptions(attempts=max_attempts)
+                client_kwargs["http_options"] = types.HttpOptions(**options)
             self.client = genai.Client(**client_kwargs)
             self.types = types
         except ImportError:
@@ -155,6 +162,8 @@ class GeminiEmbeddingFunction(EmbeddingFunction):
                 task_type="retrieval_query",
             ),
         )
+        self.last_query_usage = getattr(response, "usage_metadata", None) or getattr(response, "metadata", None)
+        self.last_query_statistics = getattr(response.embeddings[0], "statistics", None)
         return response.embeddings[0].values
 
     def truncate(self, text: str, max_tokens: int) -> str:
@@ -436,6 +445,25 @@ class HuggingFaceEmbeddingFunction(EmbeddingFunction):
 class ChromaClient:
     """ChromaDB client for Zotero semantic search."""
 
+    @classmethod
+    def attach_existing(
+        cls, path: str, collection_name: str = "zotero_library", *,
+        query_embedder: Callable[[str], list[float]] | None = None,
+    ) -> "ChromaClient":
+        """Attach to a caller-owned scratch copy without creating or deleting collections."""
+        if not (Path(path) / "chroma.sqlite3").is_file():
+            raise FileNotFoundError("attach_existing requires an existing persistent Chroma database")
+        instance = cls.__new__(cls)
+        instance.persist_directory = str(path)
+        instance.collection_name = collection_name
+        instance.embedding_function = None
+        instance.query_embedder = query_embedder
+        instance.client = chromadb.PersistentClient(
+            path=str(path), settings=Settings(anonymized_telemetry=False, allow_reset=False)
+        )
+        instance.collection = instance.client.get_collection(name=collection_name, embedding_function=None)
+        return instance
+
     def __init__(
         self,
         collection_name: str = "zotero_library",
@@ -622,6 +650,7 @@ class ChromaClient:
         n_results: int = 10,
         where: dict[str, Any] | None = None,
         where_document: dict[str, Any] | None = None,
+        query_embedder: Callable[[str], list[float]] | None = None,
     ) -> dict[str, Any]:
         """
         Search for similar documents.
@@ -631,6 +660,7 @@ class ChromaClient:
             n_results: Number of results to return
             where: Metadata filter conditions
             where_document: Document content filter conditions
+            query_embedder: Optional per-text query embedding override; takes precedence over model dispatch
 
         Returns:
             Search results from ChromaDB
@@ -650,7 +680,10 @@ class ChromaClient:
                 self.embedding_function,
                 OpenAIEmbeddingFunction | GeminiEmbeddingFunction | HuggingFaceEmbeddingFunction,
             )
-            if _is_custom_ef and hasattr(self.embedding_function, "embed_query") and query_texts:
+            injected = query_embedder if query_embedder is not None else getattr(self, "query_embedder", None)
+            if injected is not None:
+                query_kwargs["query_embeddings"] = [list(injected(text)) for text in query_texts]
+            elif _is_custom_ef and hasattr(self.embedding_function, "embed_query") and query_texts:
                 query_embeddings = []
                 for qt in query_texts:
                     emb = self.embedding_function.embed_query(qt)
