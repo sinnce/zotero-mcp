@@ -101,6 +101,95 @@ class ZoteroSemanticSearch:
         # Reranker (lazy-initialized on first search)
         self._reranker: CrossEncoderReranker | None = None
         self._reranker_config = self._load_reranker_config()
+        self._retrieval_config = self._load_retrieval_config()
+
+    def _load_retrieval_config(self) -> dict[str, Any]:
+        config = {"mode": "dense", "lexical_cache_size": 2, "collapse": False, "noise_policy": "keep", "weights": {"dense": 1.0, "lex": 0.5}}
+        if self.config_path and os.path.exists(self.config_path):
+            try:
+                with open(self.config_path) as stream:
+                    config.update(json.load(stream).get("semantic_search", {}).get("retrieval", {}))
+            except (OSError, ValueError, TypeError) as error:
+                logger.warning("Error loading retrieval config: %s", error)
+        return config
+
+    def _retrieval_search(self, query, limit, filters):
+        import time
+
+        from .retrieval import LexicalIndex, fuse, local_similarity, select_results, supports_filter
+
+        config = self._retrieval_config
+        hybrid = config.get("mode") == "hybrid"
+        fallback = hybrid and not supports_filter(filters)
+        hybrid = hybrid and not fallback
+        client = self.chroma_client
+        collection = client.collection
+        query_vector = client.embed_query(query)
+        count = collection.count()
+        if not count:
+            return dict(query=query, limit=limit, filters=filters, results=[], total_found=0)
+        reranker = self._get_reranker()
+        pool_limit = limit * max(1, self._reranker_config.get("candidate_multiplier", 3)) if reranker else limit
+        depth = min(max(100, pool_limit), count)
+        index = LexicalIndex.for_collection(collection, cache_size=config.get("lexical_cache_size", 2)) if hybrid else None
+        weights = config.get("weights", {})
+        started = time.perf_counter()
+        while True:
+            raw = client.search([query], n_results=depth, where=filters, query_embedder=lambda _: query_vector)
+            dense = [dict(item_key=key, similarity_score=1 - raw["distances"][0][i],
+                          matched_text=raw["documents"][0][i] or "", metadata=raw["metadatas"][0][i] or {})
+                     for i, key in enumerate(raw["ids"][0])]
+            candidates = dense
+            if hybrid:
+                lexical = index.search(query, depth, filters, config.get("title_weight", 3.0))
+                lexical_count = len(lexical)
+                dense_by_id = {r["item_key"]: r for r in dense}
+                missing = [r["item_key"] for r in lexical if r["item_key"] not in dense_by_id]
+                lookup = dict(ids=missing, include=["embeddings", "metadatas", "documents"])
+                if filters is not None:
+                    lookup["where"] = filters
+                stored = collection.get(**lookup) if missing else None
+                current = {}
+                configuration = getattr(collection, "configuration", None) or {}
+                space = (configuration.get("hnsw") or {}).get("space", (collection.metadata or {}).get("hnsw:space", "l2"))
+                if stored and stored.get("embeddings") is not None:
+                    for key, vector, metadata, document in zip(
+                        stored["ids"], stored["embeddings"], stored["metadatas"], stored["documents"], strict=True
+                    ):
+                        if vector is not None:
+                            current[key] = dict(item_key=key, metadata=metadata or {}, matched_text=document or "",
+                                                similarity_score=local_similarity(vector, query_vector, space))
+                # Dense hits carry current metadata. Lexical-only hits must survive
+                # the filtered lookup, including deletion interleavings.
+                lexical = [dict(r, **(dense_by_id.get(r["item_key"]) or current[r["item_key"]]))
+                           for r in lexical if r["item_key"] in dense_by_id or r["item_key"] in current]
+                candidates = fuse(dense, lexical, query, w_dense=weights.get("dense", 1.0),
+                                  w_lex=weights.get("lex", 0.5), k=config.get("k", 60),
+                                  gate=config.get("gate", False), gate_threshold=config.get("gate_threshold", 0.8),
+                                  gate_min_tokens=config.get("gate_min_tokens", 3))
+            selected = select_results(candidates, pool_limit, config.get("collapse", False), config.get("noise_policy", "keep"))
+            exhausted = len(dense) < depth and (not hybrid or lexical_count < depth)
+            if len(selected) >= pool_limit or depth >= count or exhausted:
+                break
+            depth = min(count, depth * 2)
+        if reranker and selected:
+            order = reranker.rerank(query, [r["matched_text"] for r in selected], top_k=len(selected))
+            selected = [selected[i] for i in order]
+            selected = select_results(selected, limit, config.get("collapse", False), config.get("noise_policy", "keep"))
+        nested = dict(ids=[[r["item_key"] for r in selected]],
+                      distances=[[1 - r["similarity_score"] for r in selected]],
+                      documents=[[r["matched_text"] for r in selected]], metadatas=[[r["metadata"] for r in selected]])
+        enriched = self._enrich_search_results(nested, query)
+        for result, candidate in zip(enriched, selected, strict=True):
+            for field in ("ranking_score", "ranking_method", "aliases"):
+                if field in candidate:
+                    result[field] = candidate[field]
+        diagnostics = {"lexical_filter_fallback": fallback, "candidate_depth": depth,
+                       "query_seconds": time.perf_counter() - started}
+        if index:
+            diagnostics.update(lexical_build_seconds=index.build_seconds, lexical_fingerprint_seconds=index.fingerprint_seconds,
+                               lexical_search_seconds=index.last_search_seconds)
+        return dict(query=query, limit=limit, filters=filters, results=enriched, total_found=len(enriched), retrieval=diagnostics)
 
     def _load_clean_text_config(self) -> bool:
         """Load the ingestion-only cleaning flag; never invalidate existing records."""
@@ -1021,6 +1110,11 @@ class ZoteroSemanticSearch:
             Search results with Zotero item details
         """
         try:
+            config = self._retrieval_config
+            if config.get("mode") not in {"dense", "hybrid"}:
+                raise ValueError("retrieval mode must be dense or hybrid")
+            if config.get("mode") == "hybrid" or config.get("collapse") or config.get("noise_policy", "keep") != "keep":
+                return self._retrieval_search(query, limit, filters)
             # Over-fetch candidates when re-ranking is enabled
             reranker = self._get_reranker()
             fetch_limit = limit

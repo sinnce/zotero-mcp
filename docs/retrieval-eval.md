@@ -52,3 +52,77 @@ ranking. With `k < 10`, overlap is limited by requested result depth. Ties in th
 exact reference follow collection ID order. Scores retain `1 - distance` semantics.
 An interrupted or failed run can leave an output directory; use a fresh directory
 for a subsequent run. A manifest is written only after successful verification.
+
+## Opt-in hybrid retrieval
+
+Production defaults remain `mode=dense`, `collapse=false`, `noise_policy=keep`.
+An explicit configuration can enable the new path:
+
+```json
+{"semantic_search":{"retrieval":{"mode":"hybrid","collapse":true,"noise_policy":"keep","weights":{"dense":1.0,"lex":0.5},"k":60,"title_weight":3.0,"gate":true,"gate_threshold":0.8,"gate_min_tokens":3}}}
+```
+
+The lexical branch builds a SQLite FTS5 `unicode61` index in memory from stored
+titles and documents. It quotes individual query tokens and ORs them. A batched
+content fingerprint detects changes even when collection counts do not change.
+The process cache is a locked LRU keyed by collection identity, count and
+fingerprint. `semantic_search.retrieval.lexical_cache_size` bounds retained
+collection identities (positive integer, default 2). Callers and active searches hold references
+to their indexes as leases. Eviction releases cache ownership; a finalizer closes
+the SQLite connection after the last reference is released. A per-index lock
+serializes queries, and cursors close in `finally` blocks. Eviction therefore
+cannot close a connection used by an active query. There are no ingestion or corpus embedding changes.
+
+Hybrid retrieval initially fetches 100 candidates from each branch, uses weighted
+reciprocal ranks, and optionally forces the top lexical candidate to rank 1 when
+at least three distinct query tokens cover the configured fraction of its title.
+Metadata `$eq`, `$ne`, `$and`, `$in` and `$nin` filters apply to both branches;
+unsupported filters use dense retrieval and set `retrieval.lexical_filter_fallback`.
+Before fusion, lexical-only candidates are fetched again with the original
+Chroma filter and current embeddings, metadata, and documents. Absent candidates
+are dropped, including concurrent deletions and items that no longer match.
+Missing metadata satisfies negative `$ne`/`$nin` comparisons and fails positive comparisons. Collapse preserves the first
+ranked representative and records other keys in `aliases`. Same DOIs merge;
+titles merge only without conflicting DOIs. DOI-less records with an ambiguous
+title remain separate from its conflicting DOI groups. Empty titles never merge.
+Noise uses only the left-trimmed, case-insensitive `ProQuest:` title prefix.
+`demote` moves matching candidates after other candidates, and `exclude` removes
+them. Suppression refills from deeper candidates until the requested limit or
+collection exhaustion. With reranking enabled, this refill targets
+`semantic_search.reranker.candidate_multiplier * limit` distinct candidates
+(default multiplier 3). The reranker receives that pool before final collapse and
+selection to the requested limit.
+
+`similarity_score` still means `1 - collection distance`, including locally scored
+lexical-only vectors. `ranking_score` and `ranking_method` describe hybrid order;
+MCP Markdown remains unchanged. The default dense path has no added fields.
+
+The evaluator supports `baseline-dense`, `dense-collapse`, `hybrid-rrf` (equal
+weights), `hybrid-weighted`, `hybrid-gated`, `hybrid-weighted-collapse`, and
+`hybrid-gated-collapse`. Weighted profiles start at lexical weight 0.5; gated
+profiles also enable the 0.8 title gate. These are hypotheses, not changed defaults.
+All resolved retrieval settings, skipped query IDs, full search latencies, and
+lexical build/fingerprint/query timings are recorded in rankings manifests.
+Uncommitted implementation file hashes are also recorded for reproducibility.
+For hybrid/collapse profiles, the overlap diagnostic compares final returned
+rankings with exact cosine neighbors; it does not isolate ANN recall.
+
+For dev-only tuning, use a fresh output directory for each trial:
+
+```bash
+uv run --no-sync python -m zotero_mcp.retrieval_eval run \
+  --snapshot "$snapshot_root" --suite "$suite" --cache "$cache" \
+  --profile hybrid-gated --partition dev --set weights.lex=0.25 \
+  --set gate_threshold=0.9 --output "$trial_output" --k 100
+```
+
+`--skip-missing` omits queries without cached vectors and records their IDs. Every
+run writes `evaluated-suite.jsonl` alongside `suite.manifest.json`; pass this suite
+to paper-graph scoring when using a partition or partial cache. This preserves
+exact query coverage for the scorer. Never treat missing vectors as empty retrieval
+rankings. Compare trials on identical query coverage, select parameters on dev
+only, then evaluate test queries once with the selected parameters.
+
+SQLite must support FTS5. On Linux, the semantic extra includes `pysqlite3-binary`
+for managed Python builds whose builtin SQLite omits FTS5. The fallback is private
+to the memory index and does not replace Chroma's SQLite module.

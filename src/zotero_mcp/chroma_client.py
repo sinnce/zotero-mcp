@@ -644,6 +644,15 @@ class ChromaClient:
             logger.error(f"Error upserting documents to ChromaDB: {e}")
             raise
 
+    def embed_query(self, text: str) -> list[float]:
+        """Compute one query vector for reuse by all retrieval branches."""
+        injected = getattr(self, "query_embedder", None)
+        if injected is not None:
+            return list(injected(text))
+        if isinstance(self.embedding_function, OpenAIEmbeddingFunction | GeminiEmbeddingFunction | HuggingFaceEmbeddingFunction):
+            return list(self.embedding_function.embed_query(text))
+        return list(self.embedding_function([text])[0])
+
     def search(
         self,
         query_texts: list[str],

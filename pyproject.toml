@@ -32,6 +32,7 @@ dependencies = [
 [project.optional-dependencies]
 semantic = [
     "chromadb>=0.4.0",
+    "pysqlite3-binary>=0.5.4; sys_platform == 'linux'",
     "sentence-transformers>=2.2.0",
     "openai>=1.0.0",
     "google-genai>=0.7.0",
