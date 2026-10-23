@@ -27,11 +27,12 @@ from zotero_mcp.chroma_client import (
     ResolvedEmbedding,
     create_pinned_embedding_function,
 )
+from zotero_mcp.text_clean import CLEAN_VERSION, clean_embedded_text
 from zotero_mcp.utils import format_creators
 
 BUILD_SCHEMA_VERSION = "zotero-mcp-index-build/1.0.0"
 PUBLICATION_SCHEMA_VERSION = "zotero-mcp-index-publication/1.0.0"
-TEXT_POLICY_VERSION = "zotero-mcp-metadata-text/1.0.0"
+TEXT_POLICY_VERSION = "zotero-mcp-metadata-text/2.0.0"
 COLLECTION_METADATA_SCHEMA = "zotero-mcp-index-metadata/1.0.0"
 EXCLUDED_ITEM_TYPES = frozenset({"attachment", "note", "annotation"})
 TEXT_VECTOR_DIMENSION = 3072
@@ -50,7 +51,7 @@ class _ArrayLike(Protocol):
     def tolist(self) -> object: ...
 
 
-def source_identity(client: Any) -> dict[str, object]:
+def source_identity(client: Any, *, clean_text: bool = False) -> dict[str, object]:
     """Return the stable, credential-free Zotero source identity."""
 
     endpoint = getattr(client, "endpoint", None)
@@ -76,12 +77,13 @@ def source_identity(client: Any) -> dict[str, object]:
         "library_id": str(library_id),
         "acquisition_policy": "top-level-items-exact-pagination",
         "text_policy": TEXT_POLICY_VERSION,
+        "clean_version": CLEAN_VERSION if clean_text else "legacy",
         "exclusion_policy": sorted(EXCLUDED_ITEM_TYPES),
         "deduplication_policy": "item-key-only-no-semantic-deduplication",
     }
 
 
-def metadata_document(item: Mapping[str, Any]) -> str:
+def metadata_document(item: Mapping[str, Any], *, clean_text: bool = False) -> str:
     """Create the exact frozen metadata-only document used by the legacy indexer."""
 
     raw_data = item.get("data")
@@ -106,10 +108,11 @@ def metadata_document(item: Mapping[str, Any]) -> str:
             parts.append(tag_text)
     note = data.get("note")
     if note:
-        note_text = re.sub(r"<[^>]+>", "", str(note))
+        note_text = str(note) if clean_text else re.sub(r"<[^>]+>", "", str(note))
         if note_text:
             parts.append(note_text)
-    return " ".join(parts)
+    document = " ".join(parts)
+    return clean_embedded_text(document) if clean_text else document
 
 
 def build_isolated_index(
@@ -120,6 +123,7 @@ def build_isolated_index(
     collection_name: str = DEFAULT_COLLECTION,
     protected_paths: Sequence[str | Path] = (),
     embedding_factory: Callable[[ResolvedEmbedding], Any] | None = None,
+    clean_text: bool = False,
 ) -> dict[str, object]:
     """Build, verify, seal, and no-replace publish a fresh metadata-only index."""
 
@@ -140,9 +144,9 @@ def build_isolated_index(
     staging.mkdir(mode=0o700)
 
     try:
-        source = source_identity(zotero_client)
+        source = source_identity(zotero_client, clean_text=clean_text)
         version_before = _library_version(zotero_client)
-        records = _freeze_records(zotero_client)
+        records = _freeze_records(zotero_client, clean_text=clean_text)
         version_after_freeze = _library_version(zotero_client)
         if version_before != version_after_freeze:
             raise IsolatedIndexBuildError("Zotero library changed while metadata documents were frozen")
@@ -153,6 +157,7 @@ def build_isolated_index(
     ledger_path = staging / "input-ledger.json"
     ledger = {
         "schema_version": TEXT_POLICY_VERSION,
+        "clean_version": CLEAN_VERSION if clean_text else "legacy",
         "source_identity": source,
         "library_version": version_before,
         "records": records,
@@ -177,6 +182,7 @@ def build_isolated_index(
     _write_json_fsync(run_state_path, run_state)
     collection_metadata: dict[str, str | int] = {
         "schema_version": COLLECTION_METADATA_SCHEMA,
+        "clean_version": CLEAN_VERSION if clean_text else "legacy",
         "index_uuid": index_uuid,
         "build_run_id": run_id,
         "embedding_provider": resolved.provider,
@@ -227,6 +233,7 @@ def build_isolated_index(
 
         manifest: dict[str, object] = {
             "schema_version": BUILD_SCHEMA_VERSION,
+            "clean_version": CLEAN_VERSION if clean_text else "legacy",
             "status": "complete",
             "created_at": datetime.now(timezone.utc).isoformat(),
             "producer": {
@@ -411,7 +418,7 @@ def verify_collection_against_ledger(collection: Any, ledger_path: str | Path) -
     }
 
 
-def _freeze_records(client: Any) -> list[dict[str, object]]:
+def _freeze_records(client: Any, *, clean_text: bool = False) -> list[dict[str, object]]:
     expected_count = client.num_items()
     if isinstance(expected_count, bool) or not isinstance(expected_count, int) or expected_count < 0:
         raise IsolatedIndexBuildError("Zotero top-level item count is invalid")
@@ -445,13 +452,14 @@ def _freeze_records(client: Any) -> list[dict[str, object]]:
             modified = data.get("dateModified")
             if not isinstance(modified, str) or not modified.strip():
                 raise IsolatedIndexBuildError(f"Zotero dateModified is missing for {key}")
-            document = metadata_document(item_map)
+            document = metadata_document(item_map, clean_text=clean_text)
             records.append(
                 {
                     "key": key,
                     "document": document,
                     "document_sha256": hashlib.sha256(document.encode("utf-8")).hexdigest(),
                     "metadata": {
+                        "clean_version": CLEAN_VERSION if clean_text else "legacy",
                         "item_key": key,
                         "item_type": str(data.get("itemType", "")),
                         "title": str(data.get("title", "")),

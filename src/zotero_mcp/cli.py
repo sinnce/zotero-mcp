@@ -698,12 +698,19 @@ def main():
             protected_paths = _recovery_protected_paths(config_path)
             setup_zotero_environment(config_path, strict_source=True)
             resolved = resolve_isolated_embedding(str(config_path))
+            clean_text = False
+            if config_path.exists():
+                with config_path.open() as config_file:
+                    clean_text = json.load(config_file).get("semantic_search", {}).get(
+                        "extraction", {}
+                    ).get("clean_text", False) is True
             manifest = build_isolated_index(
                 get_zotero_client(),
                 resolved,
                 args.output,
                 collection_name=args.collection,
                 protected_paths=protected_paths,
+                clean_text=clean_text,
             )
             print(
                 json.dumps(

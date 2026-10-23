@@ -25,6 +25,7 @@ from pyzotero import zotero
 
 from .chroma_client import ChromaClient, create_chroma_client
 from .client import get_zotero_client
+from .text_clean import CLEAN_VERSION, clean_source_text, finalize_embedded_text
 from .utils import format_creators, is_local_mode
 from .local_db import LocalZoteroReader, get_local_zotero_reader
 
@@ -93,10 +94,22 @@ class ZoteroSemanticSearch:
 
         # Load update configuration
         self.update_config = self._load_update_config()
+        self.clean_text = self._load_clean_text_config()
 
         # Reranker (lazy-initialized on first search)
         self._reranker: CrossEncoderReranker | None = None
         self._reranker_config = self._load_reranker_config()
+
+    def _load_clean_text_config(self) -> bool:
+        """Load the ingestion-only cleaning flag; never invalidate existing records."""
+        if self.config_path and os.path.exists(self.config_path):
+            try:
+                with open(self.config_path) as f:
+                    config = json.load(f)
+                return config.get("semantic_search", {}).get("extraction", {}).get("clean_text", False) is True
+            except Exception as e:
+                logger.warning(f"Error loading text cleaning config: {e}")
+        return False
 
     def _load_reranker_config(self) -> dict[str, Any]:
         """Load reranker configuration from file or use defaults."""
@@ -189,6 +202,14 @@ class ZoteroSemanticSearch:
 
         # Format creators as text
         creators = data.get("creators", [])
+        if self.clean_text:
+            creators = [
+                clean_source_text(creator) if isinstance(creator, str) else {
+                    key: clean_source_text(value) if key in {"firstName", "lastName", "name"} else value
+                    for key, value in creator.items()
+                }
+                for creator in creators
+            ]
         creators_text = format_creators(creators)
 
         # Additional searchable content
@@ -200,17 +221,27 @@ class ZoteroSemanticSearch:
 
         # Tags
         if tags := data.get("tags"):
-            tag_text = " ".join([tag.get("tag", "") for tag in tags])
-            extra_fields.append(tag_text)
+            if self.clean_text:
+                extra_fields.extend(tag.get("tag", "") for tag in tags)
+            else:
+                tag_text = " ".join([tag.get("tag", "") for tag in tags])
+                extra_fields.append(tag_text)
 
         # Note content (if available)
         if note := data.get("note"):
-            # Clean HTML from notes
-            import re
-            note_text = re.sub(r'<[^>]+>', '', note)
-            extra_fields.append(note_text)
+            if self.clean_text:
+                extra_fields.append(note)
+            else:
+                # Preserve the legacy note bytes when cleaning is disabled.
+                import re
+                note_text = re.sub(r'<[^>]+>', '', note)
+                extra_fields.append(note_text)
 
         # Combine all text fields
+        if self.clean_text:
+            # Preserve field boundaries for HTML pairing, including individual tags.
+            title, abstract = clean_source_text(title), clean_source_text(abstract)
+            extra_fields = [clean_source_text(field) for field in extra_fields]
         text_parts = [title, creators_text, abstract] + extra_fields
         return " ".join(filter(None, text_parts))
 
@@ -264,6 +295,7 @@ class ZoteroSemanticSearch:
                 break
         metadata["citation_key"] = citation_key
 
+        metadata["clean_version"] = CLEAN_VERSION if self.clean_text else "legacy"
         return metadata
 
     def should_update_database(self) -> bool:
@@ -901,10 +933,20 @@ class ZoteroSemanticSearch:
         metadatas = []
         ids = []
 
+        # API mode fetches existing items too. Routine updates must not migrate
+        # their text policy (including missing/older clean_version metadata).
+        # A deliberate force rebuild is the only path that replaces existing IDs.
+        existing_ids = set() if force_rebuild else self.chroma_client.get_existing_ids(
+            [item.get("key", "") for item in items if item.get("key")]
+        )
+
         for item in items:
             try:
                 item_key = item.get("key", "")
                 if not item_key:
+                    stats["skipped"] += 1
+                    continue
+                if item_key in existing_ids:
                     stats["skipped"] += 1
                     continue
 
@@ -912,10 +954,16 @@ class ZoteroSemanticSearch:
                 # Always include structured fields; append fulltext when available
                 fulltext = item.get("data", {}).get("fulltext", "")
                 structured_text = self._create_document_text(item)
+                if self.clean_text:
+                    fulltext = clean_source_text(fulltext)
                 if fulltext.strip():
                     doc_text = (structured_text + "\n\n" + fulltext) if structured_text.strip() else fulltext
                 else:
                     doc_text = structured_text
+                # Fields are already cleaned independently. Never parse their join
+                # as HTML: literal opening/closing tags can belong to different fields.
+                if self.clean_text:
+                    doc_text = finalize_embedded_text(doc_text)
                 metadata = self._create_metadata(item)
 
                 if not doc_text.strip():
@@ -937,10 +985,6 @@ class ZoteroSemanticSearch:
 
         # Add documents to ChromaDB if any
         if documents:
-            existing_ids = set()
-            if not force_rebuild:
-                existing_ids = self.chroma_client.get_existing_ids(ids)
-
             try:
                 self.chroma_client.upsert_documents(documents, metadatas, ids)
                 for doc_id in ids:
